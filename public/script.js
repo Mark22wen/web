@@ -1559,20 +1559,35 @@ let activeChart = null;
 let currentChartInstance = null;
 
 // 辅助函数（实时从 workbook 读取）
-function getYears() {
-    if (!window.workbook || !window.workbook['省份']) return [];
-    return [...new Set(window.workbook['省份'].map(r => r['年份']))].sort();
+function getYears(table = 'province') {
+    if (!window.workbook) return [];
+    if (table === 'province') {
+        return [...new Set(window.workbook['省份'].map(r => r['年份']))].sort();
+    } else {
+        return [...new Set(window.workbook['地级市'].map(r => r['时间']))].sort();
+    }
 }
 
-function getAllMetrics() {
-    if (!window.workbook || !window.workbook['省份'] || !window.workbook['省份'][0]) return [];
-    const sample = window.workbook['省份'][0];
-    return Object.keys(sample).filter(k => k !== '年份' && k !== '地区' && typeof sample[k] === 'number');
+function getAllMetrics(table = 'province') {
+    if (!window.workbook) return [];
+    let sample = null;
+    if (table === 'province') {
+        sample = window.workbook['省份']?.[0];
+    } else {
+        sample = window.workbook['地级市']?.[0];
+    }
+    if (!sample) return [];
+    return Object.keys(sample).filter(k => k !== '年份' && k !== '地区' && k !== '时间地区' && typeof sample[k] === 'number');
 }
 
-function getAllRegions() {
-    if (!window.workbook || !window.workbook['省份']) return [];
-    return [...new Set(window.workbook['省份'].map(r => r['地区']))].sort();
+function getAllRegions(table = 'province') {
+    if (!window.workbook) return [];
+    if (table === 'province') {
+        return [...new Set(window.workbook['省份'].map(r => r['地区']))].sort();
+    } else if (table === 'city') {
+        return [...new Set(window.workbook['地级市'].map(r => r['地区']))].sort();
+    }
+    return [];
 }
 
 // 默认配置
@@ -1618,59 +1633,66 @@ function renderControls(type) {
     const container = document.getElementById('analysis-controls');
     if (!container) return;
     container.innerHTML = '';
+    
+    if (type === 'scatter') {
     const years = getYears();
     const metrics = getAllMetrics();
     const regions = getAllRegions();
-    updateDefaultRegions();
-        if (years.length === 0) {
-        container.innerHTML = '<span style="color:red;">无可用年份数据</span>';
-        return;
-    }
     
-    const defaultYear = years.includes(2023) ? 2023 : years[0];
+    // 年份（默认最近一年）
+    const defaultYear = years.includes(2023) ? 2023 : years[years.length - 1];
+    const yearDiv = document.createElement('div');
+    yearDiv.className = 'control-group';
+    yearDiv.innerHTML = `<span>年份：</span><select id="scatter-year">${years.map(y => `<option value="${y}" ${y === defaultYear ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
+    container.appendChild(yearDiv);
     
-    if (type === 'radar' || type === 'heatmap' || type === 'rose') {
-        container.appendChild(createSelectGroup('年份', 'chart-year', years, DEFAULT_YEAR));
-        container.appendChild(createMultiSelectGroup('指标', 'chart-metrics', metrics, DEFAULT_METRICS));
-        container.appendChild(createMultiSelectGroup('地区', 'chart-regions', regions, DEFAULT_REGIONS));
-        const btn = document.createElement('button');
-        btn.innerText = '生成图表';
-        btn.className = 'btn-sm';
-        btn.onclick = () => loadChart(type);
-        container.appendChild(btn);
-    } else if (type === 'scatter') {
-        container.appendChild(createSelectGroup('X轴指标', 'scatter-x', metrics, metrics[0]));
-        container.appendChild(createSelectGroup('Y轴指标', 'scatter-y', metrics, metrics[1]));
-        container.appendChild(createMultiSelectGroup('地区', 'scatter-regions', regions, DEFAULT_REGIONS.slice(0, 6)));
-        const btn = document.createElement('button');
-        btn.innerText = '生成图表';
-        btn.onclick = () => loadChart(type);
-        container.appendChild(btn);
-    } else if (type === 'boxplot') {
-    const years = getYears();
-    const metrics = getAllMetrics();
-    container.appendChild(createSelectGroup('年份', 'box-year', years, years.includes(2023) ? 2023 : years[0]));
-    container.appendChild(createSelectGroup('指标', 'box-metric', metrics, metrics[0]));
+    // X轴指标（默认第一个）
+    const defaultX = metrics[0];
+    const xDiv = document.createElement('div');
+    xDiv.className = 'control-group';
+    xDiv.innerHTML = `<span>X轴指标：</span><select id="scatter-x">${metrics.map(m => `<option value="${m}" ${m === defaultX ? 'selected' : ''}>${m}</option>`).join('')}</select>`;
+    container.appendChild(xDiv);
     
-    // 统计对象下拉框：显示中文，值为英文
-    const tableDiv = document.createElement('div');
-    tableDiv.className = 'control-group';
-    tableDiv.innerHTML = `
-        <span>统计对象：</span>
-        <select id="box-table">
-            <option value="province">省份</option>
-            <option value="city">地级市</option>
+    // Y轴指标（默认第二个，如果有）
+    const defaultY = metrics[1] || metrics[0];
+    const yDiv = document.createElement('div');
+    yDiv.className = 'control-group';
+    yDiv.innerHTML = `<span>Y轴指标：</span><select id="scatter-y">${metrics.map(m => `<option value="${m}" ${m === defaultY ? 'selected' : ''}>${m}</option>`).join('')}</select>`;
+    container.appendChild(yDiv);
+    
+    // 地区多选（默认选中前 6 个地区）
+    const defaultRegions = regions.slice(0, 6);
+    const regionDiv = document.createElement('div');
+    regionDiv.className = 'control-group';
+    regionDiv.innerHTML = `
+        <span>地区：</span>
+        <select id="scatter-regions" multiple size="4" style="min-width: 180px;">
+            ${regions.map(r => `<option value="${r}" ${defaultRegions.includes(r) ? 'selected' : ''}>${r}</option>`).join('')}
         </select>
+        <button type="button" class="btn-xs" id="scatter-select-all">全选</button>
+        <button type="button" class="btn-xs" id="scatter-clear-all">清空</button>
+        <span style="font-size: 11px; color: #888; margin-left: 8px;">💡 按住 Ctrl 可多选</span>
     `;
-    container.appendChild(tableDiv);
+    container.appendChild(regionDiv);
     
+    // 生成按钮
     const btn = document.createElement('button');
-    btn.innerText = '生成箱线图';
+    btn.innerText = '生成散点图';
     btn.className = 'btn-sm';
     btn.onclick = () => loadChart(type);
     container.appendChild(btn);
+    
+    // 绑定全选/清空
+    setTimeout(() => {
+        const selectAll = document.getElementById('scatter-select-all');
+        const clearAll = document.getElementById('scatter-clear-all');
+        const selectEl = document.getElementById('scatter-regions');
+        if (selectAll) selectAll.onclick = () => { Array.from(selectEl.options).forEach(opt => opt.selected = true); };
+        if (clearAll) clearAll.onclick = () => { Array.from(selectEl.options).forEach(opt => opt.selected = false); };
+    }, 50);
 }
 }
+
 
 // 加载图表数据
 async function loadChart(type) {
@@ -1678,145 +1700,39 @@ async function loadChart(type) {
     if (!chartDom) return;
     if (currentChartInstance) currentChartInstance.dispose();
     
-    let data, option;
-    const year = document.getElementById('chart-year')?.value || DEFAULT_YEAR;
-    const metrics = document.getElementById('chart-metrics') ? Array.from(document.getElementById('chart-metrics').selectedOptions).map(o => o.value) : DEFAULT_METRICS;
-    const regions = document.getElementById('chart-regions') ? Array.from(document.getElementById('chart-regions').selectedOptions).map(o => o.value).slice(0, 12) : DEFAULT_REGIONS;
-    
-    if (type === 'radar') {
-    const res = await fetch('/api/radar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, metrics, regions })
-    });
-    data = await res.json();
-    if (data.error) { alert(data.error); return; }
-    
-    console.log('雷达图数据:', data);  // 调试：确认 series 长度
-    
-    // 关键：每个地区作为一个独立的 series 对象
-    const seriesList = data.series.map(s => ({
-        name: s.name,
-        type: 'radar',
-        data: [s],  // 注意：data 需要是一个数组，每个元素是一个对象 { value: [...] }
-        lineStyle: { width: 2 },
-        symbol: 'circle',
-        symbolSize: 6,
-        areaStyle: { opacity: 0 }
-    }));
-    
-    option = {
-        radar: { indicator: data.indicators },
-        series: seriesList
-    };
-    
-    if (currentChartInstance) currentChartInstance.dispose();
-    currentChartInstance = echarts.init(chartDom);
-    currentChartInstance.setOption(option);
-
-    } else if (type === 'heatmap') {
-        const res = await fetch('/api/heatmap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year, metrics, regions }) });
-        data = await res.json();
-        option = {
-        xAxis: { type: 'category', data: data.xAxis, name: '指标' },
-        yAxis: { type: 'category', data: data.yAxis, name: '省份' },
-        visualMap: { 
-            min: data.minValue, 
-            max: data.maxValue, 
-            calculable: true,
-            inRange: { color: ['#e0f3f8', '#abd9e9', '#74add1', '#4575b4', '#313695'] }
-        },
-        series: [{
-            type: 'heatmap',
-            data: data.data,
-            label: { show: true, formatter: (params) => params.data[2].toFixed(2) },
-            emphasis: { itemStyle: { shadowBlur: 10 } }
-        }]
-    };
-    } else if (type === 'scatter') {
-        const xMetric = document.getElementById('scatter-x')?.value || metrics[0];
-        const yMetric = document.getElementById('scatter-y')?.value || metrics[1];
-        const scatterRegions = Array.from(document.getElementById('scatter-regions')?.selectedOptions || []).map(o => o.value);
-        const res = await fetch('/api/scatter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year, xMetric, yMetric, regions: scatterRegions }) });
-        data = await res.json();
-        option = {
-        title: { text: `${xMetric} vs ${yMetric}`, left: 'center' },
-        xAxis: { name: data.xName, nameLocation: 'middle', nameGap: 35 },
-        yAxis: { name: data.yName, nameLocation: 'middle', nameGap: 35 },
-        series: [{
-            type: 'scatter',
-            data: data.data,
-            symbolSize: 14,
-            label: { show: true, formatter: p => p.data[2], position: 'right', offset: [8, 0], fontSize: 10, fontWeight: 'bold' },
-            itemStyle: { color: '#ee6666', borderColor: '#fff', borderWidth: 1 }
-        }]
-    };
-    } else if (type === 'boxplot') {
-    const metric = document.getElementById('box-metric')?.value;
-    const year = parseInt(document.getElementById('box-year')?.value);
-    const table = document.getElementById('box-table')?.value || 'province';
-    
-    const res = await fetch('/api/boxplot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, metric, table })
-    });
-    data = await res.json();
-    if (data.error) { alert(data.error); return; }
-    
-    const tableName = table === 'province' ? '省份' : '地级市';
-    option = {
-        title: { text: `${metric} (${year}年, ${tableName}) 分布`, left: 'center' },
-        xAxis: { type: 'category', data: [metric] },
-        yAxis: { type: 'value', name: metric },  // 不设置 min/max，让 ECharts 自动适配
-        series: [{
-            type: 'boxplot',
-            data: [[data.min, data.q1, data.median, data.q3, data.max]],
-            itemStyle: { color: '#91c7ae', borderColor: '#2f4554', borderWidth: 2 },
-            boxWidth: 60
-        }],
-        tooltip: { trigger: 'item', formatter: (params) => {
-            const v = params.value;
-            return `最小值: ${v[0].toFixed(4)}<br>下四分位: ${v[1].toFixed(4)}<br>中位数: ${v[2].toFixed(4)}<br>上四分位: ${v[3].toFixed(4)}<br>最大值: ${v[4].toFixed(4)}`;
-        }}
-    };
-}else if (type === 'rose') {
-    const res = await fetch('/api/rose', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, metrics, regions: regions.slice(0, 8) })  // 限制最多8个地区
-    });
-    data = await res.json();
-    
-    // 检查数据有效性
-    if (!data.data || data.data.length === 0 || !data.regions || data.regions.length === 0) {
-        console.error('玫瑰图无有效数据');
-        return;
+    if (type === 'scatter') {
+        const year = parseInt(document.getElementById('scatter-year')?.value) || 2023;
+        const xMetric = document.getElementById('scatter-x')?.value;
+        const yMetric = document.getElementById('scatter-y')?.value;
+        const regions = Array.from(document.getElementById('scatter-regions')?.selectedOptions || []).map(o => o.value);
+        
+        if (!xMetric || !yMetric) { alert('请选择 X 和 Y 轴指标'); return; }
+        if (!regions.length) { alert('请至少选择一个地区'); return; }
+        
+        const res = await fetch('/api/scatter', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ year, xMetric, yMetric, regions })
+        });
+        const data = await res.json();
+        
+        const option = {
+            title: { text: `${xMetric} vs ${yMetric} (${year}年)`, left: 'center' },
+            xAxis: { name: data.xName, nameLocation: 'middle', nameGap: 35 },
+            yAxis: { name: data.yName, nameLocation: 'middle', nameGap: 35 },
+            series: [{
+                type: 'scatter',
+                data: data.data,
+                symbolSize: 12,
+                label: { show: true, formatter: p => p.data[2], position: 'top', offset: [0, -8], fontSize: 10 },
+                itemStyle: { color: '#ee6666' }
+            }]
+        };
+        
+        currentChartInstance = echarts.init(chartDom);
+        currentChartInstance.setOption(option);
+        setTimeout(() => currentChartInstance.resize(), 100);
     }
-    
-    const series = data.metrics.map((metric, i) => ({
-        name: metric,
-        type: 'bar',
-        data: data.data.map(row => row[i]),
-        stack: 'total',
-        coordinateSystem: 'polar',
-        barGap: '0%',
-        barCategoryGap: '0%',
-        itemStyle: { borderRadius: [4,4,0,0], color: COLORS[i % COLORS.length] }
-    }));
-    
-    option = {
-        title: { text: `${year}年 多指标构成`, left: 'center' },
-        angleAxis: { type: 'category', data: data.regions, axisLabel: { rotate: 35, fontSize: 10 } },
-        radiusAxis: { min: 0, max: 1, name: '占比' },
-        polar: {},
-        legend: { data: data.metrics, orient: 'vertical', left: 'left', top: 'middle' },
-        tooltip: { trigger: 'item', formatter: (params) => `${params.seriesName}: ${(params.value * 100).toFixed(1)}%` },
-        series: series
-    };
-}
-    currentChartInstance = echarts.init(chartDom);
-    currentChartInstance.setOption(option);
 }
 
 // 打开分析面板
@@ -1825,17 +1741,49 @@ function openAnalysisPanel(type) {
     const panel = document.getElementById('analysis-panel');
     if (!panel) return;
     const titleMap = {
-        radar: '雷达图 - 多指标对比',
-        heatmap: '热力图 - 省份×指标',
-        scatter: '散点图 - 两指标关联',
-        boxplot: '箱线图 - 数据分布',
-        rose: '环形堆叠图 - 多指标构成'
+        scatter: '⚫ 散点图 - 两指标关联分析'
     };
-    const titleEl = document.getElementById('panel-title');
-    if (titleEl) titleEl.innerText = titleMap[type]|| type;
+    document.getElementById('panel-title').innerText = titleMap[type] || type;
     panel.style.display = 'block';
     renderControls(type);
-    loadChart(type);
+    
+    // 自动加载默认图表（等待控件渲染完成）
+    setTimeout(() => {
+        loadChart(type);
+        bindExportEvents();
+    }, 100);
+}
+
+// 导出图表函数
+function exportChart(format) {
+    const chartDom = document.getElementById('analysis-chart');
+    if (!chartDom) return;
+    const chart = echarts.getInstanceByDom(chartDom);
+    if (!chart) {
+        alert('图表尚未加载完成');
+        return;
+    }
+    let url;
+    if (format === 'png') {
+        url = chart.getDataURL({ type: 'png', pixelRatio: 2 });
+    } else if (format === 'jpg') {
+        url = chart.getDataURL({ type: 'jpg', pixelRatio: 2 });
+    } else {
+        url = chart.getDataURL({ type: 'svg' });
+    }
+    const link = document.createElement('a');
+    link.download = `chart_${activeChart}_${Date.now()}.${format}`;
+    link.href = url;
+    link.click();
+}
+
+function bindExportEvents() {
+    const pngBtn = document.getElementById('export-chart-png');
+    const jpgBtn = document.getElementById('export-chart-jpg');
+    const svgBtn = document.getElementById('export-chart-svg');
+    if (pngBtn) pngBtn.onclick = () => exportChart('png');
+    if (jpgBtn) jpgBtn.onclick = () => exportChart('jpg');
+    if (svgBtn) svgBtn.onclick = () => exportChart('svg');
 }
 
 // 初始化卡片事件

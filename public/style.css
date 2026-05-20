@@ -687,9 +687,11 @@ body.dark-mode .pagination-bar .page-btn:hover {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 16px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #eef2f8;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.panel-header button {
+    margin-left: 5px;
 }
 .close-btn {
     background: #eef2f8;

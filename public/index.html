@@ -168,34 +168,10 @@
     </div>
 <!-- 高级分析卡片区（小矩形卡片并排） -->
 <div class="analysis-cards">
-    <div class="card-item" data-chart="radar">
-        <div class="card-icon">📡</div>
-        <div class="card-title">雷达图</div>
-        <div class="card-desc">多指标对比</div>
-        <button class="view-btn">查看 →</button>
-    </div>
-    <div class="card-item" data-chart="heatmap">
-        <div class="card-icon">🔥</div>
-        <div class="card-title">热力图</div>
-        <div class="card-desc">省份×指标</div>
-        <button class="view-btn">查看 →</button>
-    </div>
     <div class="card-item" data-chart="scatter">
         <div class="card-icon">⚫</div>
         <div class="card-title">散点图</div>
         <div class="card-desc">两指标关联</div>
-        <button class="view-btn">查看 →</button>
-    </div>
-    <div class="card-item" data-chart="boxplot">
-        <div class="card-icon">📦</div>
-        <div class="card-title">箱线图</div>
-        <div class="card-desc">数据分布</div>
-        <button class="view-btn">查看 →</button>
-    </div>
-    <div class="card-item" data-chart="rose">
-        <div class="card-icon">🌹</div>
-        <div class="card-title">环形堆叠图</div>
-        <div class="card-desc">多指标构成</div>
         <button class="view-btn">查看 →</button>
     </div>
 </div>
@@ -203,8 +179,13 @@
 <!-- 分析详情面板（初始隐藏，点击查看后展开） -->
 <div id="analysis-panel" style="display: none;">
     <div class="panel-header">
-        <span id="panel-title">雷达图</span>
-        <button id="close-panel" class="close-btn">← 返回卡片</button>
+        <span id="panel-title">展示</span>
+        <div>
+            <button id="export-chart-png" class="btn-sm" style="margin-right: 8px;">📸 PNG</button>
+            <button id="export-chart-jpg" class="btn-sm" style="margin-right: 8px;">📸 JPG</button>
+            <button id="export-chart-svg" class="btn-sm">📸 SVG</button>
+            <button id="close-panel" class="close-btn">← 隐藏区域</button>
+        </div>
     </div>
     <div id="analysis-controls" class="analysis-controls"></div>
     <div id="analysis-chart" style="height: 500px;"></div>

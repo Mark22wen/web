@@ -419,15 +419,14 @@ async function queryRAGStream(question, res) {
     console.log(`意图识别: ${intent}`);
 
 if (/(预测|预计|未来|趋势|预估)/.test(resolvedQuestion)) {
-    // 1. 提取当前问题实体
+    // 从当前问题提取实体
     let extracted = extractMetricAndYear(resolvedQuestion);
     let hasMetric = extracted && extracted.metric;
     let hasRegion = extracted && extracted.region;
     let hasYear = extracted && extracted.year;
     
-    // 2. 从历史对话中补全（关键修复）
-    if (!hasMetric || !hasRegion) {
-        // 遍历历史消息（从最近到最早）
+    // 从历史对话中补全缺失信息（关键修复）
+    if ((!hasMetric || !hasRegion) && conversationHistory.length > 0) {
         for (let i = conversationHistory.length - 1; i >= 0; i--) {
             const msg = conversationHistory[i];
             if (msg.role === 'user') {
@@ -435,31 +434,30 @@ if (/(预测|预计|未来|趋势|预估)/.test(resolvedQuestion)) {
                 if (histExtracted) {
                     if (!hasMetric && histExtracted.metric) {
                         hasMetric = true;
-                        if (!extracted) extracted = {};
+                        extracted = extracted || {};
                         extracted.metric = histExtracted.metric;
                         console.log(`✅ 从历史补全指标: ${extracted.metric}`);
                     }
                     if (!hasRegion && histExtracted.region) {
                         hasRegion = true;
-                        if (!extracted) extracted = {};
+                        extracted = extracted || {};
                         extracted.region = histExtracted.region;
                         console.log(`✅ 从历史补全地区: ${extracted.region}`);
                     }
                 }
-                // 如果指标和地区都齐了，跳出循环
                 if (hasMetric && hasRegion) break;
             }
         }
     }
     
-    // 3. 缺少年份时默认明年
+    // 缺少年份时默认明年
     if (!hasYear) {
         hasYear = true;
-        if (!extracted) extracted = {};
+        extracted = extracted || {};
         extracted.year = new Date().getFullYear() + 1;
     }
     
-    // 4. 仍然缺少信息时反问
+    // 仍然缺少关键信息时反问
     if (!hasMetric) {
         res.write("请指定要预测的指标，例如：科学支出水平、工业机器人密度等。");
         res.end();
@@ -471,7 +469,7 @@ if (/(预测|预计|未来|趋势|预估)/.test(resolvedQuestion)) {
         return;
     }
     
-    // 5. 执行预测
+    // 执行预测
     const history = getHistoricalData(extracted.metric, extracted.region, 10);
     if (history.length >= 2) {
         const forecasts = holtLinearForecast(history, 1);
@@ -485,7 +483,7 @@ if (/(预测|预计|未来|趋势|预估)/.test(resolvedQuestion)) {
     res.write(`历史数据不足（${history.length}年），无法预测。`);
     res.end();
     return;
-} 
+}
     if (intent === 'rank' || intent === 'compare') {
         const extracted = extractMetricAndYear(resolvedQuestion);
         if (extracted) {
@@ -609,47 +607,9 @@ app.post('/api/clear_history', (req, res) => {
     conversationHistory = [];
     res.json({ status: "历史已清空" });
 });
-// ==================== 1. 雷达图接口 ====================
-// ==================== 雷达图（填充辐射状） ====================
-app.post('/api/radar', (req, res) => {
-    try {
-        const { year, metrics, regions } = req.body;
-        const yearData = rawDataCache.province.filter(r => r['年份'] === year);
-        // 归一化 + 构建series
-        const matrix = regions.map(r => metrics.map(m => yearData.find(d => d['地区'] === r)?.[m] || 0));
-        const normalized = metrics.map((_, i) => {
-            const col = matrix.map(row => row[i]);
-            const min = Math.min(...col), max = Math.max(...col);
-            if (max === min) return col.map(() => 0.5);
-            return col.map(v => (v - min) / (max - min));
-        });
-        const series = regions.map((r, i) => ({ name: r, value: normalized.map(col => col[i]) }));
-        res.json({ indicators: metrics.map(m => ({ name: m, max: 1 })), series });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
 
-// ==================== 2. 热力图接口 ====================
-app.post('/api/heatmap', (req, res) => {
-    try {
-        const { year, metrics, regions } = req.body;
-        const yearData = rawDataCache.province.filter(r => r['年份'] === year);
-        const data = [];
-        let maxVal = 0;
-        for (let i = 0; i < regions.length; i++) {
-            const row = yearData.find(r => r['地区'] === regions[i]);
-            for (let j = 0; j < metrics.length; j++) {
-                const val = row?.[metrics[j]] ?? 0;
-                data.push([j, i, val]);
-                if (val > maxVal) maxVal = val;
-            }
-        }
-        res.json({ data, xAxis: metrics, yAxis: regions, minValue: 0, maxValue: maxVal });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
 
-// ==================== 3. 散点图接口 ====================
+// ====================  散点图接口 ====================
 app.post('/api/scatter', (req, res) => {
     try {
         const { year, xMetric, yMetric, regions } = req.body;
@@ -665,74 +625,7 @@ app.post('/api/scatter', (req, res) => {
     }
 });
 
-// ==================== 4. 箱线图接口 ====================
-function percentile(sorted, p) {
-    const idx = (p / 100) * (sorted.length - 1);
-    const lower = Math.floor(idx);
-    const upper = Math.ceil(idx);
-    if (lower === upper) return sorted[lower];
-    return sorted[lower] * (upper - idx) + sorted[upper] * (idx - lower);
-}
 
-app.post('/api/boxplot', (req, res) => {
-    try {
-        const { year, metric, table = 'province' } = req.body;
-        let rows = table === 'province' ? rawDataCache.province : rawDataCache.city;
-        const yearData = rows.filter(r => r['年份'] === year);
-        const values = yearData.map(r => r[metric]).filter(v => typeof v === 'number' && !isNaN(v));
-        if (!values.length) return res.json({ error: '无有效数据' });
-        values.sort((a, b) => a - b);
-        res.json({
-            min: values[0],
-            q1: percentile(values, 25),
-            median: percentile(values, 50),
-            q3: percentile(values, 75),
-            max: values[values.length - 1],
-            name: metric,
-            sampleCount: values.length
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// ==================== 5. 玫瑰图接口 ====================
-app.post('/api/rose', (req, res) => {
-    try {
-        const { year, metrics, table = 'province', regions: userRegions, maxRegions = 12 } = req.body;
-        let rows = table === 'province' ? rawDataCache.province : rawDataCache.city;
-        const yearData = rows.filter(r => r['年份'] === year);
-        let regionItems = yearData.map(row => {
-            const region = row['地区'];
-            if (!region) return null;
-            const values = metrics.map(m => row[m] ?? 0);
-            const total = values.reduce((a, b) => a + b, 0);
-            const percentages = total === 0 ? values.map(() => 0) : values.map(v => v / total);
-            return { name: region, values, percentages, total };
-        }).filter(item => item !== null);
-        
-        if (userRegions && userRegions.length) {
-            regionItems = regionItems.filter(item => userRegions.includes(item.name));
-            const ordered = [];
-            for (const reg of userRegions) {
-                const found = regionItems.find(item => item.name === reg);
-                if (found) ordered.push(found);
-            }
-            regionItems = ordered;
-        } else {
-            regionItems.sort((a, b) => b.total - a.total);
-            regionItems = regionItems.slice(0, maxRegions);
-        }
-        res.json({
-            metrics,
-            regions: regionItems.map(r => r.name),
-            data: regionItems.map(r => r.percentages),
-            totals: regionItems.map(r => r.total)
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
 // ========== 启动服务器 ==========
 app.listen(PORT, async () => {
     console.log(`🚀 服务已启动，访问 http://localhost:${PORT}`);
