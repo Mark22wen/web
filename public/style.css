@@ -764,3 +764,148 @@ body.dark-mode .close-btn {
 body.dark-mode .close-btn:hover {
     background-color: #dce5ef;
 }
+/* Agent 弹窗样式 */
+.agent-modal {
+    position: fixed;
+    z-index: 2000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.agent-modal-content {
+    background-color: white;
+    border-radius: 16px;
+    width: 80%;
+    max-width: 900px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    animation: modalFadeIn 0.2s ease;
+}
+
+@keyframes modalFadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.agent-modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #eef2f8;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 600;
+    font-size: 18px;
+    color: #1e466e;
+}
+
+.agent-modal-close {
+    font-size: 28px;
+    cursor: pointer;
+    color: #999;
+    transition: color 0.2s;
+}
+
+.agent-modal-close:hover {
+    color: #1e466e;
+}
+
+.agent-modal-body {
+    padding: 20px;
+}
+
+/* 夜间模式适配 */
+body.dark-mode .agent-modal-content {
+    background-color: #1a1e2a;
+    border: 1px solid #2a2f3f;
+}
+
+body.dark-mode .agent-modal-header {
+    border-bottom-color: #2a2f3f;
+    color: #eef2ff;
+}
+/* 弹窗图表容器确保正确尺寸 */
+#agent-modal-chart {
+    width: 100%;
+    height: 400px;
+}
+
+/* 弹窗主体 */
+#agent-modal-body {
+    overflow: hidden;
+}
+/* 弹窗夜间模式 */
+body.dark-mode #agent-modal > div:first-child {
+    background-color: #1a1e2a !important;
+    border: 1px solid #2a2f3f !important;
+}
+
+body.dark-mode #agent-modal-header {
+    background-color: #1f2535 !important;
+    border-bottom-color: #2a2f3f !important;
+    color: #eef2ff !important;
+}
+
+body.dark-mode #agent-modal-body {
+    background-color: #1a1e2a !important;
+}
+
+body.dark-mode .agent-modal-close,
+body.dark-mode #agent-modal-close {
+    color: #eef2ff !important;
+}
+
+body.dark-mode #agent-modal-resize {
+    background-color: #3a4055 !important;
+}
+/* 散点图容器夜间模式背景 */
+body.dark-mode #analysis-chart,
+body.dark-mode #analysis-chart-container,
+body.dark-mode .analysis-chart {
+    background-color: #11151f !important;
+}
+
+/* 散点图内部背景（ECharts 透明，让容器背景透出） */
+body.dark-mode #analysis-chart canvas {
+    background-color: transparent !important;
+}
+/* 散点图控制栏夜间模式 */
+body.dark-mode .analysis-controls {
+    background-color: #1a1e2a !important;
+}
+
+body.dark-mode .control-group select,
+body.dark-mode .control-group span,
+body.dark-mode .control-group label {
+    background-color: #252b3d !important;
+    color: #eef2ff !important;
+    border-color: #4a5070 !important;
+}
+
+/* 散点图生成按钮夜间模式 */
+body.dark-mode .control-group .btn-sm {
+    background-color: #2f3650 !important;
+    color: #eef2ff !important;
+    border: 1px solid #5a6090 !important;
+}
+/* 统计行夜间模式（确保背景和文字都正确） */
+body.dark-mode .stats-row td {
+    background-color: #1a1e2a !important;
+    color: #eef2ff !important;
+    border-bottom-color: #2a2f3f !important;
+}
+
+/* 统计行中 span 标签的文字颜色 */
+body.dark-mode .stats-row td span {
+    color: #eef2ff !important;
+}

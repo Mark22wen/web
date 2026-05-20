@@ -6,7 +6,9 @@ const axios = require('axios');
 const fs = require('fs').promises;
 const path = require('path');
 const ss = require('simple-statistics');
-
+const natural = require('natural');
+const _ = require('lodash');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const PORT = 3001;
@@ -18,6 +20,15 @@ let allDocuments = [];
 let rawDataCache = { national: [], province: [], city: [] };
 let metricNameList = [];
 let conversationHistory = [];
+// Agent 状态管理
+let agentMemory = [];
+let retrievalCache = new Map();
+let conversationContext = {
+    lastRegion: null,
+    lastMetric: null,
+    lastYear: null,
+    interestTopics: []
+};
 const MAX_HISTORY = 6;
 
 // 指标名映射（口语化 → 实际字段名）
@@ -235,7 +246,325 @@ function extractMetricAndYear(question) {
     
     return { metric: matchedMetric, year, table, region };
 }
+// 高级实体提取
+function extractEntities(question) {
+    const entities = {
+        regions: [],
+        metrics: [],
+        years: []
+    };
+    
+    // 提取地区
+    const provinceList = [...new Set(rawDataCache.province.map(r => r['地区']))];
+    provinceList.forEach(p => {
+        if (question.includes(p)) {
+            entities.regions.push(p);
+        }
+    });
+    
+    // 提取指标
+    metricNameList.forEach(m => {
+        const clean = cleanMetricName(m);
+        if (question.includes(m) || question.includes(clean)) {
+            entities.metrics.push(m);
+        }
+    });
+    
+    // 提取年份
+    const years = question.match(/20\d{2}/g);
+    if (years) {
+        entities.years = years.map(y => parseInt(y));
+    }
+    
+    // 补充上下文记忆
+    if (!entities.regions.length && conversationContext.lastRegion) {
+        entities.regions.push(conversationContext.lastRegion);
+    }
+    if (!entities.metrics.length && conversationContext.lastMetric) {
+        entities.metrics.push(conversationContext.lastMetric);
+    }
+    
+    return entities;
+}
 
+// 高级意图识别
+function detectAdvancedIntent(question) {
+    if (/预测|forecast|未来|预计/.test(question)) return 'forecast';
+    if (/趋势|变化|走势|发展/.test(question)) return 'trend';
+    if (/对比|比较|vs|和|与/.test(question)) return 'compare';
+    if (/排名|最高|最低|前\d+/.test(question)) return 'rank';
+    if (/分析|原因|为什么|影响/.test(question)) return 'analysis';
+    if (/图表|展示|可视化|画图/.test(question)) return 'chart';
+    return 'qa';
+}
+// 增强混合检索（带缓存）
+async function hybridRetrieve(query, topK = 8) {
+    const cacheKey = `${query}_${topK}`;
+    if (retrievalCache.has(cacheKey)) {
+        console.log('使用缓存检索结果');
+        return retrievalCache.get(cacheKey);
+    }
+    
+    try {
+        const embedding = await getEmbedding(query);
+        const vectorResult = await collection.query({
+            queryEmbeddings: [embedding],
+            nResults: topK
+        });
+        
+        const bm25Ids = bm25Index ? bm25Index.search(query, topK) : [];
+        const bm25Docs = bm25Ids.map(id => allDocuments[id]);
+        const vectorDocs = vectorResult.documents[0] || [];
+        
+        const fused = reciprocalRankFusion([vectorDocs, bm25Docs]);
+        const results = fused.slice(0, topK);
+        
+        retrievalCache.set(cacheKey, results);
+        setTimeout(() => retrievalCache.delete(cacheKey), 60000);
+        
+        return results;
+    } catch (err) {
+        console.error('混合检索失败:', err);
+        return [];
+    }
+}
+function buildAnalysisPrompt({ question, retrieved, entities, intent, history }) {
+    return `你是一个专业的数据研究 Agent。**必须返回 JSON 格式，不要输出任何其他内容。**
+
+## 用户问题
+${question}
+
+## 意图
+${intent}
+
+## 识别到的实体
+${JSON.stringify(entities, null, 2)}
+
+## 检索到的数据
+${retrieved.slice(0, 5).join('\n\n')}
+
+## 对话历史
+${history.slice(-4).map(h => `${h.role}: ${h.content}`).join('\n')}
+
+## 强制要求
+1. 必须使用中文回答
+2. 必须返回以下 JSON 格式，不要有任何额外文字
+3. chart 字段必须填写，除非完全没有相关数据
+
+## 输出格式（严格遵守）
+{
+    "answer": "中文分析结果（100字以内）",
+    "chart": {
+        "type": "line",
+        "metric": "指标名称（从实体中提取）",
+        "regions": ["地区名称"],
+        "years": [2019,2020,2021,2022,2023],
+        "title": "图表标题"
+    },
+    "insights": ["洞察1", "洞察2"],
+    "confidence": 0.9
+}
+
+现在输出 JSON：`;
+}
+// Agent 主流程（替换原有的预测分支）
+async function runAgent(question, history) {
+    const intent = detectAdvancedIntent(question);
+    let entities = extractEntities(question);
+    
+    console.log(`🎯 Agent 意图: ${intent}`);
+    console.log(`📊 识别实体:`, entities);
+    
+    // ========== 1. 排名处理 ==========
+    if (intent === 'rank') {
+        // 提取年份
+        const yearMatch = question.match(/20\d{2}/);
+        const year = yearMatch ? parseInt(yearMatch[0]) : 2023;
+        
+        // 提取指标
+        let metric = entities.metrics[0];
+        if (!metric) {
+            for (const m of metricNameList) {
+                if (question.includes(m) || question.includes(cleanMetricName(m))) {
+                    metric = m;
+                    break;
+                }
+            }
+        }
+        if (!metric) {
+            return {
+                answer: "请指定要排名的指标，例如：工业机器人密度、科学支出水平等。",
+                chart: null, insights: [], confidence: 0.5
+            };
+        }
+        
+        // 提取 topN
+        let topN = 3;
+        const topMatch = question.match(/前(\d+)/);
+        if (topMatch) topN = parseInt(topMatch[1]);
+        const lowMatch = question.match(/最低|最小|最少/);
+        const order = lowMatch ? 'asc' : 'desc';
+        
+        const rankResult = getRanking(metric, year, order, topN, 'province');
+        
+        if (rankResult.length > 0) {
+            const rankDesc = order === 'desc' ? '最高' : '最低';
+            let answer = `${year}年 ${metric} ${rankDesc}前 ${rankResult.length} 个省份：\n`;
+            rankResult.forEach((item, idx) => {
+                answer += `${idx+1}. ${item.region}：${item.value}\n`;
+            });
+            return { answer, chart: null, insights: [`${metric}${rankDesc}排名`], confidence: 0.95 };
+        }
+        return { answer: `未找到${year}年${metric}的有效数据`, chart: null, insights: [], confidence: 0.5 };
+    }
+    
+    // ========== 2. 对比处理 ==========
+    if (intent === 'compare') {
+        // 提取指标
+        let metric = entities.metrics[0];
+        if (!metric) {
+            for (const m of metricNameList) {
+                if (question.includes(m) || question.includes(cleanMetricName(m))) {
+                    metric = m;
+                    break;
+                }
+            }
+        }
+        if (!metric) {
+            return { answer: "请指定要对比的指标", chart: null, insights: [], confidence: 0.5 };
+        }
+        
+        // 提取年份
+        const yearMatch = question.match(/20\d{2}/);
+        const year = yearMatch ? parseInt(yearMatch[0]) : 2023;
+        
+        // 提取对比的两个地区
+        const regions = entities.regions;
+        if (regions.length < 2) {
+            // 从问题中提取两个地区名
+            const provinceList = [...new Set(rawDataCache.province.map(r => r['地区']))];
+            const found = provinceList.filter(p => question.includes(p));
+            if (found.length >= 2) {
+                entities.regions = found.slice(0, 2);
+            } else {
+                return { answer: "请指定要对比的两个地区，例如：广东和江苏", chart: null, insights: [], confidence: 0.5 };
+            }
+        }
+        
+        const regionA = entities.regions[0];
+        const regionB = entities.regions[1];
+        
+        const provinceRows = rawDataCache.province;
+        const rowA = provinceRows.find(r => r['地区'] === regionA && r['年份'] === year);
+        const rowB = provinceRows.find(r => r['地区'] === regionB && r['年份'] === year);
+        
+        const valA = rowA ? rowA[metric] : '无数据';
+        const valB = rowB ? rowB[metric] : '无数据';
+        
+        let answer = `${year}年 ${regionA}的${metric}为 ${valA}，${regionB}的${metric}为 ${valB}。`;
+        if (typeof valA === 'number' && typeof valB === 'number') {
+            const diff = valA - valB;
+            answer += ` ${regionA}比${regionB} ${diff > 0 ? '高' : '低'} ${Math.abs(diff).toFixed(4)}。`;
+        }
+        return { answer, chart: null, insights: [`${metric}对比`], confidence: 0.9 };
+    }
+    
+    // ========== 3. 预测处理 ==========
+    if (intent === 'forecast') {
+        let metric = entities.metrics[0];
+        let region = entities.regions[0];
+        
+        if (!metric) {
+            for (const m of metricNameList) {
+                if (question.includes(m) || question.includes(cleanMetricName(m))) {
+                    metric = m;
+                    break;
+                }
+            }
+        }
+        if (!region) {
+            const provinceList = [...new Set(rawDataCache.province.map(r => r['地区']))];
+            region = provinceList.find(p => question.includes(p)) || '广东省';
+        }
+        
+        const yearMatch = question.match(/20\d{2}/);
+        const targetYear = yearMatch ? parseInt(yearMatch[0]) : new Date().getFullYear() + 1;
+        
+        const history = getHistoricalData(metric, region, 10);
+        if (history.length >= 2) {
+            const forecastValue = holtLinearForecast(history, targetYear);
+            if (forecastValue !== null) {
+                const answer = `基于${history[0].year}-${history[history.length-1].year}年数据，预测${targetYear}年${region}的${metric}为 ${forecastValue.toFixed(6)}。`;
+                return { answer, chart: null, insights: [`${metric}预测`], confidence: 0.85 };
+            }
+        }
+        return { answer: `${region}的${metric}历史数据不足（${history.length}年），无法预测。`, chart: null, insights: [], confidence: 0.5 };
+    }
+    
+    // ========== 4. 点查询（原有逻辑） ==========
+    // ... 保留原有的点查询代码 ...
+    
+    // ========== 5. 默认：趋势分析 ==========
+    // 更新上下文记忆
+    if (entities.regions.length) conversationContext.lastRegion = entities.regions[0];
+    if (entities.metrics.length) conversationContext.lastMetric = entities.metrics[0];
+    if (entities.years.length) conversationContext.lastYear = entities.years[entities.years.length - 1];
+    
+    if (!entities.regions.length && conversationContext.lastRegion) entities.regions = [conversationContext.lastRegion];
+    if (!entities.metrics.length && conversationContext.lastMetric) entities.metrics = [conversationContext.lastMetric];
+    if (!entities.years.length) {
+        const currentYear = new Date().getFullYear();
+        entities.years = [currentYear-4, currentYear-3, currentYear-2, currentYear-1, currentYear];
+    }
+    
+    const metric = entities.metrics[0] || '科学支出水平';
+    const region = entities.regions[0] || '广东省';
+    const years = entities.years;
+    
+    const provinceRows = rawDataCache.province;
+    const regionRows = provinceRows.filter(r => r['地区'] === region);
+    const chartData = years.map(year => {
+        const row = regionRows.find(r => r['年份'] === year);
+        return { year, value: row ? row[metric] : 0 };
+    });
+    
+    let answer = '';
+    if (chartData.length >= 2) {
+        const first = chartData.find(d => d.value > 0);
+        const last = chartData.slice().reverse().find(d => d.value > 0);
+        if (first && last) {
+            if (last.value > first.value) answer = `${region}的${metric}呈上升趋势，从${first.year}年的${first.value.toFixed(4)}增长到${last.year}年的${last.value.toFixed(4)}。`;
+            else if (last.value < first.value) answer = `${region}的${metric}呈下降趋势，从${first.year}年的${first.value.toFixed(4)}下降到${last.year}年的${last.value.toFixed(4)}。`;
+            else answer = `${region}的${metric}基本保持稳定。`;
+        } else answer = `${region}的${metric}数据不完整，无法准确判断趋势。`;
+    } else answer = `${region}的${metric}数据点不足，建议补充更多年份的数据。`;
+    
+    const chart = { type: 'line', metric, regions: [region], years, title: `${region} ${metric} 趋势图` };
+    
+    return { answer, chart, insights: [`${metric}趋势分析`], confidence: 0.85 };
+}
+// Agent API（替代原有 /api/chat 的部分功能）
+// ========== Agent API 路由 ==========
+app.post('/api/agent', async (req, res) => {
+    const { question } = req.body;
+    if (!question) {
+        return res.status(400).json({ error: "请提供问题" });
+    }
+    
+    try {
+        const history = conversationHistory.slice(-6);
+        const result = await runAgent(question, history);
+        
+        conversationHistory.push({ role: 'user', content: question });
+        conversationHistory.push({ role: 'assistant', content: result.answer });
+        if (conversationHistory.length > 20) conversationHistory.shift();
+        
+        res.json(result);
+    } catch (err) {
+        console.error('Agent 错误:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
 // ========== 闲聊检测 ==========
 function isChitchat(question) {
     const yearMatch = question.match(/20\d{2}/);

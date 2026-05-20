@@ -65,21 +65,361 @@ function addMessage(role, content, isStreaming = false) {
     return null;
 }
 
-// 发送消息
+// ========== Agent 图表渲染函数（放在外部，全局可用） ==========
+let agentModalChart = null;
+
+function renderAgentChart(config) {
+    console.log('渲染Agent图表:', config);
+    
+    if (!config || !config.metric) {
+        console.warn('图表配置无效', config);
+        return;
+    }
+    
+    // 确保弹窗容器存在
+    let modal = document.getElementById('agent-modal');
+    if (!modal) {
+        console.error('弹窗容器不存在，请检查 HTML');
+        return;
+    }
+    
+    // 显示弹窗
+    modal.style.display = 'flex';
+    
+    // 确保图表容器存在
+    const chartDom = document.getElementById('agent-modal-chart');
+    if (!chartDom) {
+        console.error('图表容器不存在');
+        return;
+    }
+    
+    // 初始化图表
+    if (agentModalChart) {
+        agentModalChart.dispose();
+    }
+    agentModalChart = echarts.init(chartDom);
+    
+    // 获取数据...
+    const metric = config.metric;
+    const chartType = config.type || 'line';
+    const years = config.years || [];
+    const regions = config.regions || [];
+    
+    if (!window.workbook || !window.workbook['省份']) {
+        console.warn('数据未加载');
+        return;
+    }
+    
+    const provinceRows = window.workbook['省份'];
+    let filteredRows = provinceRows;
+    
+    if (years.length) {
+        filteredRows = filteredRows.filter(r => years.includes(r['年份']));
+    }
+    if (regions.length) {
+        filteredRows = filteredRows.filter(r => regions.includes(r['地区']));
+    }
+    
+    const series = [];
+    const targetRegions = regions.length ? regions : [...new Set(filteredRows.map(r => r['地区']))].slice(0, 5);
+    
+    targetRegions.forEach(region => {
+        const regionRows = filteredRows.filter(r => r['地区'] === region);
+        const data = regionRows.map(r => r[metric] || 0);
+        if (data.length && data.some(v => v !== 0)) {
+            series.push({
+                name: region,
+                type: chartType,
+                data: data,
+                smooth: true
+            });
+        }
+    });
+    
+    const allYears = years.length ? years : [...new Set(filteredRows.map(r => r['年份']))].sort();
+    
+    agentModalChart.setOption({
+        title: { text: config.title || metric, left: 'center' },
+        tooltip: { trigger: 'axis' },
+        legend: { data: series.map(s => s.name), top: 30 },
+        xAxis: { type: 'category', data: allYears, name: '年份' },
+        yAxis: { type: 'value', name: metric },
+        series: series
+    });
+    
+    console.log('✅ Agent 图表弹窗渲染完成');
+}
+
+// 关闭弹窗
+function closeAgentModal() {
+    const modal = document.getElementById('agent-modal');
+    if (modal) modal.style.display = 'none';
+    if (agentModalChart) {
+        agentModalChart.dispose();
+        agentModalChart = null;
+    }
+}
+
+// 绑定关闭事件
+document.getElementById('close-agent-modal')?.addEventListener('click', closeAgentModal);
+// 点击背景关闭
+document.getElementById('agent-modal')?.addEventListener('click', (e) => {
+    if (e.target === document.getElementById('agent-modal')) {
+        closeAgentModal();
+    }
+});
+// 自动生成图表（降级方案）
+function autoGenerateChart(question) {
+    // 简单提取指标和地区
+    let metric = '科学支出水平';
+    let region = '广东省';
+    
+    const provinces = [...new Set(window.workbook['省份'].map(r => r['地区']))];
+    for (const p of provinces) {
+        if (question.includes(p)) {
+            region = p;
+            break;
+        }
+    }
+    
+    const metrics = getAllMetrics();
+    for (const m of metrics) {
+        if (question.includes(m) || question.includes(cleanMetricName(m))) {
+            metric = m;
+            break;
+        }
+    }
+    
+    const currentYear = new Date().getFullYear();
+    const years = [currentYear-4, currentYear-3, currentYear-2, currentYear-1, currentYear];
+    
+    renderAgentChart({
+        type: 'line',
+        metric: metric,
+        regions: [region],
+        years: years,
+        title: `${region} ${metric} 近5年趋势`
+    });
+}
+// ========== 弹窗拖动、缩放 ==========
+let modalDrag = false;
+let modalOffsetX, modalOffsetY;
+
+const agentModal = document.getElementById('agent-modal');
+const modalHeader = document.getElementById('agent-modal-header');
+const modalResize = document.getElementById('agent-modal-resize');
+
+// 默认位置和大小
+agentModal.style.top = '100px';
+agentModal.style.left = '100px';
+agentModal.style.width = '800px';
+
+// 拖动
+modalHeader.addEventListener('mousedown', (e) => {
+    if (e.target === modalResize) return;
+    modalDrag = true;
+    modalOffsetX = e.clientX - agentModal.offsetLeft;
+    modalOffsetY = e.clientY - agentModal.offsetTop;
+    agentModal.style.cursor = 'grabbing';
+    e.preventDefault();
+});
+
+document.addEventListener('mousemove', (e) => {
+    if (modalDrag) {
+        let left = e.clientX - modalOffsetX;
+        let top = e.clientY - modalOffsetY;
+        left = Math.max(0, Math.min(left, window.innerWidth - agentModal.offsetWidth));
+        top = Math.max(0, Math.min(top, window.innerHeight - agentModal.offsetHeight));
+        agentModal.style.left = left + 'px';
+        agentModal.style.top = top + 'px';
+    }
+});
+
+document.addEventListener('mouseup', () => {
+    modalDrag = false;
+    agentModal.style.cursor = '';
+});
+
+// 缩放
+let resizeDrag = false;
+let startX, startY, startWidth, startHeight;
+
+modalResize.addEventListener('mousedown', (e) => {
+    resizeDrag = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    startWidth = agentModal.offsetWidth;
+    startHeight = agentModal.offsetHeight;
+    e.stopPropagation();
+    e.preventDefault();
+});
+
+document.addEventListener('mousemove', (e) => {
+    if (resizeDrag) {
+        const newWidth = startWidth + (e.clientX - startX);
+        const newHeight = startHeight + (e.clientY - startY);
+        agentModal.style.width = Math.max(400, newWidth) + 'px';
+        agentModal.style.height = Math.max(300, newHeight) + 'px';
+        document.getElementById('agent-modal-chart').style.height = (newHeight - 80) + 'px';
+        if (agentModalChart) agentModalChart.resize();
+    }
+});
+
+document.addEventListener('mouseup', () => {
+    resizeDrag = false;
+});
+
+// 关闭弹窗
+document.getElementById('agent-modal-close').addEventListener('click', () => {
+    agentModal.style.display = 'none';
+    if (agentModalChart) {
+        agentModalChart.dispose();
+        agentModalChart = null;
+    }
+});
+
+// 最小化（简单隐藏）
+document.getElementById('agent-modal-minimize')?.addEventListener('click', () => {
+    agentModal.style.display = 'none';
+});
+// ========== 聊天面板拖动 + 缩放 ==========
+let chatDrag = false;
+let chatOffsetX, chatOffsetY;
+let chatResizeDrag = false;
+let chatStartX, chatStartY, chatStartWidth, chatStartHeight;
+
+const chatPanel = document.getElementById('chat-panel');
+const chatHeader = document.getElementById('chat-header');
+const chatResize = document.getElementById('chat-resize');
+const chatBody = document.getElementById('chat-body');
+
+// 拖动
+if (chatHeader) {
+    chatHeader.addEventListener('mousedown', (e) => {
+        if (e.target === chatResize) return;
+        chatDrag = true;
+        chatOffsetX = e.clientX - chatPanel.offsetLeft;
+        chatOffsetY = e.clientY - chatPanel.offsetTop;
+        chatPanel.style.cursor = 'grabbing';
+        e.preventDefault();
+    });
+}
+
+document.addEventListener('mousemove', (e) => {
+    if (chatDrag) {
+        let left = e.clientX - chatOffsetX;
+        let top = e.clientY - chatOffsetY;
+        left = Math.max(0, Math.min(left, window.innerWidth - chatPanel.offsetWidth));
+        top = Math.max(0, Math.min(top, window.innerHeight - chatPanel.offsetHeight));
+        chatPanel.style.left = left + 'px';
+        chatPanel.style.top = top + 'px';
+        chatPanel.style.bottom = 'auto';
+        chatPanel.style.right = 'auto';
+    }
+    
+    if (chatResizeDrag) {
+        const newWidth = chatStartWidth + (e.clientX - chatStartX);
+        const newHeight = chatStartHeight + (e.clientY - chatStartY);
+        chatPanel.style.width = Math.max(280, newWidth) + 'px';
+        chatPanel.style.height = Math.max(350, newHeight) + 'px';
+        if (chatMessages) {
+            chatMessages.style.maxHeight = (newHeight - 120) + 'px';
+        }
+    }
+});
+
+document.addEventListener('mouseup', () => {
+    chatDrag = false;
+    chatResizeDrag = false;
+    if (chatPanel) chatPanel.style.cursor = '';
+});
+
+// 缩放
+if (chatResize) {
+    chatResize.addEventListener('mousedown', (e) => {
+        chatResizeDrag = true;
+        chatStartX = e.clientX;
+        chatStartY = e.clientY;
+        chatStartWidth = chatPanel.offsetWidth;
+        chatStartHeight = chatPanel.offsetHeight;
+        e.stopPropagation();
+        e.preventDefault();
+    });
+}
+
+// 最小化/恢复
+let chatMinimized = false;
+const minimizeBtn = document.getElementById('chat-minimize');
+if (minimizeBtn) {
+    minimizeBtn.addEventListener('click', () => {
+        if (chatMinimized) {
+            chatBody.style.display = 'flex';
+            chatMinimized = false;
+            minimizeBtn.textContent = '🗕';
+        } else {
+            chatBody.style.display = 'none';
+            chatMinimized = true;
+            minimizeBtn.textContent = '🗗';
+        }
+    });
+}
+
+// 关闭面板
+const closeBtn = document.getElementById('chat-close');
+if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+        chatPanel.style.display = 'none';
+    });
+}
+
+// 可选：添加一个浮动按钮恢复显示
+const showChatBtn = document.createElement('button');
+showChatBtn.textContent = '💬';
+showChatBtn.style.position = 'fixed';
+showChatBtn.style.bottom = '20px';
+showChatBtn.style.right = '20px';
+showChatBtn.style.width = '50px';
+showChatBtn.style.height = '50px';
+showChatBtn.style.borderRadius = '50%';
+showChatBtn.style.background = '#1e466e';
+showChatBtn.style.color = 'white';
+showChatBtn.style.border = 'none';
+showChatBtn.style.cursor = 'pointer';
+showChatBtn.style.zIndex = '999';
+showChatBtn.style.display = 'none';
+document.body.appendChild(showChatBtn);
+
+showChatBtn.addEventListener('click', () => {
+    chatPanel.style.display = 'flex';
+    showChatBtn.style.display = 'none';
+});
+
+// 监听关闭按钮隐藏浮动按钮显示
+if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+        setTimeout(() => {
+            if (chatPanel.style.display === 'none') {
+                showChatBtn.style.display = 'flex';
+            }
+        }, 100);
+    });
+}
+// ========== 发送消息 ==========
 async function sendMessage() {
+    if (typeof stopCarousel === 'function') {
+    stopCarousel();
+}
     const question = chatInput.value.trim();
     if (!question) return;
 
-    // 添加用户消息到界面
+    // 添加用户消息
     addMessage('user', escapeHtml(question));
-    chatInput.value = '';           // 清空输入框
-    chatInput.style.height = 'auto'; // 重置高度（如果是textarea）
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
 
-    // 禁用发送按钮，启用停止按钮
     chatSend.disabled = true;
     chatStop.disabled = false;
 
-    // 创建一个“助手消息”占位，并获取更新函数
     const updateAssistant = addMessage('assistant', '思考中...', true);
     let fullAnswer = '';
 
@@ -87,23 +427,29 @@ async function sendMessage() {
     const signal = currentController.signal;
 
     try {
-        const response = await fetch('/api/chat', {
+        const response = await fetch('/api/agent', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ question }),
             signal
         });
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder('utf-8');
+        const data = await response.json();
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = decoder.decode(value, { stream: true });
-            fullAnswer += chunk;
-            updateAssistant(fullAnswer);
+        // 显示回答
+        const answer = data.answer || '无回答';
+        updateAssistant(answer);
+        fullAnswer = answer;
+
+        // 如果有图表配置，自动渲染
+        if (data.chart && data.chart.metric) {
+            console.log('📊 收到图表配置:', data.chart);
+            renderAgentChart(data.chart);
+        } else if (/趋势|分析|变化|走势/.test(question)) {
+            // 降级：自动生成图表
+            autoGenerateChart(question);
         }
+
     } catch (err) {
         if (err.name === 'AbortError') {
             updateAssistant(fullAnswer + '\n\n[已停止生成]');
@@ -1567,7 +1913,9 @@ function getYears(table = 'province') {
         return [...new Set(window.workbook['地级市'].map(r => r['时间']))].sort();
     }
 }
-
+function cleanMetricName(key) {
+    return key.replace(/[（(].*?[）)]/g, '').trim();
+}
 function getAllMetrics(table = 'province') {
     if (!window.workbook) return [];
     let sample = null;
