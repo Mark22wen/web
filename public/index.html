@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>科研教育人才一体化平台 · 数据研究</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- 使用国内 CDN，避免存储警告，且速度更快 -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.20.2/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<div class="platform-header">
+    <div class="header-title">
+        <h1>📊 科研教育人才一体化平台 · 数据研究</h1>
+        <p>主图表联动 | 独立饼图轮播 | 排名对比图 | 表格列筛选 | 鼠标悬停暂停轮播</p>
+    </div>
+    <div style="position: absolute; top: 20px; right: 20px;">
+        <button id="darkModeToggle" class="btn-sm">🌙 夜间模式</button>
+    </div>
+</div>
+<div class="chat-panel" style="position: fixed; bottom: 20px; right: 20px; width: 300px; background: white; border: 1px solid #ccc; border-radius: 8px; display: flex; flex-direction: column; z-index: 1000; max-height: 500px;">
+    <div style="padding: 12px; border-bottom: 1px solid #eee; font-weight: bold;">🤖 智能问答助手</div>
+    <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 12px; min-height: 200px;">
+        <!-- 聊天记录会动态添加到这里 -->
+    </div>
+    <div style="padding: 12px; border-top: 1px solid #eee;">
+        <textarea id="chat-input" rows="1" placeholder="输入问题..." style="width: 100%; padding: 6px; border-radius: 8px; border: 1px solid #ccc; resize: vertical;"></textarea>
+        <div class="chat-buttons" style="display: flex; gap: 8px; margin-top: 8px;">
+            <button id="chat-send" style="flex:1;">提问</button>
+            <button id="chat-stop" style="flex:1; background: #999;" disabled>停止</button>
+            <button id="chat-clear" style="flex:1; background: #f0ad4e;">清空对话</button>
+        </div>
+    </div>
+</div>
+
+<div class="dashboard-container">
+    <div class="card">
+        <div class="card-header">
+            <span>🗂️ 数据工作表</span>
+            <select id="sheet-list" class="sheet-select"></select>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <div class="toolbar-group">
+                <div class="tool-item">
+                    <label>📈 图表类型</label>
+                    <select id="chart-type">
+                        <option value="auto">智能推荐</option>
+                        <option value="line">折线图</option>
+                        <option value="bar">柱状图</option>
+                    </select>
+                    <span class="help-icon" title="智能推荐：全国用折线图，省份/地级市用柱状图。">❓</span>
+                </div>
+            </div>
+            <div class="toolbar-group">
+                <div class="tool-item">
+                    <label>🎨 标题自定义</label>
+                    <input id="chart-title" placeholder="图表标题（自动）" style="width:140px">
+                </div>
+                <button id="apply-set" class="btn-sm">应用</button>
+                <button id="reset-set" class="btn-sm">重置</button>
+            </div>
+        </div>
+        <div class="chart-main-layout">
+            <div class="indicator-panel" id="dynamic-panel">
+                <h4 id="panel-title">指标列表</h4>
+                <!-- 唯一的指标下拉框容器 -->
+                <div id="metric-selector-container" style="padding: 8px 16px; border-bottom: 1px solid #eef2f8;">
+                    <label>📊 当前指标：</label>
+                    <select id="main-metric-select" style="width: 100%; margin-top: 4px;"></select>
+                </div>
+                <div id="group-actions" style="padding: 8px 16px; display: flex; gap: 8px; border-bottom: 1px solid #eef2f8;">
+                    <button id="select-all" class="btn-xs">全选</button>
+                    <button id="invert-select" class="btn-xs">反选</button>
+                    <button id="reset-select" class="btn-xs">重置</button>
+                    <button id="clear-select" class="btn-xs">清空</button>
+                </div>
+                <div id="region-search-container" style="padding: 8px 16px; border-bottom: 1px solid #eef2f8; display: flex; gap: 8px; align-items: center;">
+                    <input type="text" id="region-search" placeholder="🔍 搜索地区" style="flex:1; padding:6px 8px;">
+                    <button id="clear-search-btn" class="btn-xs" style="padding: 4px 8px;">✖ 清空搜索</button>
+                </div>
+                <!-- 快速跳转下拉框 -->
+                <div id="quick-jump-container" style="padding: 8px 16px; border-bottom: 1px solid #eef2f8;">
+                    <label>📍 快速跳转：</label>
+                    <select id="quick-jump-region" style="width: 100%; margin-top: 4px;">
+                        <option value="">-- 选择地区 --</option>
+                    </select>
+                </div>
+                <div id="indicator-list" class="indicator-list"></div>
+            </div>
+            <div class="right-chart">
+                <div id="main-chart" style="height: 100%; width: 100%;"></div>
+            </div>
+        </div>
+        <div class="axis-control">
+            <input id="x-name" placeholder="X轴名称（自动）">
+            <input id="y-name" placeholder="Y轴名称（自动）">
+            <input id="y-max" placeholder="Y轴最大值（自动）" type="number" step="any">
+        </div>
+        <div class="chart-export-toolbar" style="padding: 8px 20px 20px; display: flex; gap: 12px;">
+            <span>导出主图表：</span>
+            <button id="export-main-png" class="btn-sm">PNG</button>
+            <button id="export-main-jpg" class="btn-sm">JPG</button>
+            <button id="export-main-svg" class="btn-sm">SVG</button>
+        </div>
+    </div>
+
+    <div class="card pie-card" style="display: none;">
+        <div class="card-header">
+            <span>🥧 总-分结构饼图</span>
+            <div class="toolbar-group">
+                <div class="tool-item">
+                    <label>📅 年份</label>
+                    <select id="pie-year-select"></select>
+                    <button id="pie-year-prev" class="btn-icon">◀</button>
+                    <button id="pie-year-next" class="btn-icon">▶</button>
+                </div>
+                <div class="tool-item">
+                    <label>📊 指标</label>
+                    <select id="pie-metric-select"></select>
+                </div>
+                <button id="pie-reset-hidden" class="btn-sm">↺ 重置隐藏</button>
+                <span class="help-icon" title="左侧省份列表勾选显示单独扇区；取消勾选的省份合并为「已隐藏省份」扇区；图例点击可隐藏/显示对应省份（与左侧同步）。">❓</span>
+            </div>
+        </div>
+        <div style="display: flex; gap: 20px; padding: 12px;">
+            <div class="indicator-panel" style="width: 260px;">
+                <h4>📋 省份列表（勾选显示单独扇区）<span class="help-icon" title="勾选后饼图显示该省份单独扇区；取消勾选合并到「已隐藏省份」扇区。">❓</span></h4>
+                <div id="pie-group-actions" style="padding: 8px 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button id="pie-select-all" class="btn-xs">全选</button>
+                    <button id="pie-invert-select" class="btn-xs">反选</button>
+                    <button id="pie-reset-select" class="btn-xs">重置</button>
+                    <button id="pie-clear-select" class="btn-xs">清空</button>
+                </div>
+                <div id="pie-province-list" class="indicator-list" style="max-height: 320px;"></div>
+            </div>
+            <div id="pie-chart" style="flex: 1; height: 420px;"></div>
+        </div>
+        <div id="pie-status" style="padding: 8px 20px 20px; font-size:0.8rem; color:#5a6e8a; text-align:center;"></div>
+        <div style="padding: 0 20px 16px 20px; font-size:0.75rem; color:#999; border-top:1px solid #eef2f8;">
+            📌 注：本研究数据暂不包含香港、澳门、台湾地区。
+        </div>
+        <div class="chart-export-toolbar" style="padding: 8px 20px 20px; display: flex; gap: 12px;">
+            <span>导出饼图：</span>
+            <button id="export-pie-png" class="btn-sm">PNG</button>
+            <button id="export-pie-jpg" class="btn-sm">JPG</button>
+            <button id="export-pie-svg" class="btn-sm">SVG</button>
+        </div>
+    </div>
+
+    <div class="card advanced-card" style="display: none;">
+        <div class="card-header">
+            <span>🔬 高级可视化分析 <span style="font-weight:normal; font-size:0.75rem;">(独立轮播)</span></span>
+            <div class="toolbar-group" id="advanced-toolbar"></div>
+        </div>
+        <div id="advanced-content" style="min-height: 460px; width: 100%; padding: 12px; display: flex; gap: 20px;"></div>
+        <div id="advanced-controls" style="padding: 0 20px 20px 20px; display: flex; gap: 12px; flex-wrap: wrap;"></div>
+        <div class="chart-export-toolbar" style="padding: 8px 20px 20px; display: flex; gap: 12px;">
+            <span>导出当前分析图：</span>
+            <button id="export-adv-png" class="btn-sm">PNG</button>
+            <button id="export-adv-jpg" class="btn-sm">JPG</button>
+            <button id="export-adv-svg" class="btn-sm">SVG</button>
+        </div>
+    </div>
+<!-- 高级分析卡片区（小矩形卡片并排） -->
+<div class="analysis-cards">
+    <div class="card-item" data-chart="radar">
+        <div class="card-icon">📡</div>
+        <div class="card-title">雷达图</div>
+        <div class="card-desc">多指标对比</div>
+        <button class="view-btn">查看 →</button>
+    </div>
+    <div class="card-item" data-chart="heatmap">
+        <div class="card-icon">🔥</div>
+        <div class="card-title">热力图</div>
+        <div class="card-desc">省份×指标</div>
+        <button class="view-btn">查看 →</button>
+    </div>
+    <div class="card-item" data-chart="scatter">
+        <div class="card-icon">⚫</div>
+        <div class="card-title">散点图</div>
+        <div class="card-desc">两指标关联</div>
+        <button class="view-btn">查看 →</button>
+    </div>
+    <div class="card-item" data-chart="boxplot">
+        <div class="card-icon">📦</div>
+        <div class="card-title">箱线图</div>
+        <div class="card-desc">数据分布</div>
+        <button class="view-btn">查看 →</button>
+    </div>
+    <div class="card-item" data-chart="rose">
+        <div class="card-icon">🌹</div>
+        <div class="card-title">环形堆叠图</div>
+        <div class="card-desc">多指标构成</div>
+        <button class="view-btn">查看 →</button>
+    </div>
+</div>
+
+<!-- 分析详情面板（初始隐藏，点击查看后展开） -->
+<div id="analysis-panel" style="display: none;">
+    <div class="panel-header">
+        <span id="panel-title">雷达图</span>
+        <button id="close-panel" class="close-btn">← 返回卡片</button>
+    </div>
+    <div id="analysis-controls" class="analysis-controls"></div>
+    <div id="analysis-chart" style="height: 500px;"></div>
+</div>
+
+    <div class="card">
+        <div class="card-header">
+            <span>📋 明细数据表（当前工作表）</span>
+            <div class="toolbar-group">
+                <div class="tool-item" id="column-selector-btn">
+                    <label>📊 显示列</label>
+                    <button id="toggle-column-panel" class="btn-xs">选择列</button>
+                    <span class="help-icon" title="点击按钮弹出面板，勾选要显示的列，支持全选/清空/重置。">❓</span>
+                </div>
+                <div class="tool-item">
+                    <label>每页行数</label>
+                    <select id="page-size-select">
+                        <option value="20">20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                    <span class="help-icon" title="调整表格每页显示的行数。">❓</span>
+                </div>
+                <button id="clear-sort" class="btn-sm">🗑️ 清除排序</button>
+                <button id="reset-table" class="btn-sm">🔄 重置表格</button>
+                <button id="export-csv" class="btn-sm">📎 CSV (.csv)</button>
+                <button id="export-excel" class="btn-sm">📑 Excel (.xlsx)</button>
+                <button id="print-table" class="btn-sm">🖨️ 打印表格</button>
+            </div>
+        </div>
+        <div class="data-section">
+            <div class="table-toolbar">
+                <input id="search-input" type="text" placeholder="🔍 搜索表格内容" class="search-input">
+                <div class="scale-control">
+                    <span>表格缩放</span>
+                    <input type="range" id="table-scale" min="0.6" max="1.2" step="0.05" value="1">
+                    <span id="scale-text">100%</span>
+                    <span class="help-icon" title="调整表格显示大小，同时自动调整每页行数（缩放越大页显示行数越多）。">❓</span>
+                </div>
+                <div id="sort-status" style="font-size:0.75rem; color:#5a6e8a;">⚡ 当前排序：无（点击表头排序）</div>
+            </div>
+            <div class="table-container">
+                <div class="table-wrap">
+                    <table id="data-table">
+                        <thead><tr><th>加载中...</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="pagination-bar">
+                <button id="page-first" class="page-btn">⏮ 首页</button>
+                <button id="page-prev" class="page-btn">◀ 上一页</button>
+                <span>第 <span id="page-current">1</span> 页 / 共 <span id="page-total">1</span> 页</span>
+                <button id="page-next" class="page-btn">下一页 ▶</button>
+                <button id="page-last" class="page-btn">末页 ⏭</button>
+                <span style="margin-left:12px">跳转至</span>
+                <input type="number" id="page-goto" min="1" style="width:60px"> 页
+                <button id="page-go" class="page-btn">GO</button>
+                <span style="margin-left:12px">总记录: <span id="total-records">0</span></span>
+            </div>
+        </div>
+    </div>
+    <footer>© 科研教育人才一体化平台 · 鼠标悬停图表时轮播暂停 | 问号图标可查看功能说明</footer>
+</div>
+
+<!-- 列选择器弹出面板 -->
+<div id="column-panel" style="display:none; position:fixed; background:white; border:1px solid #dce3ec; border-radius:12px; padding:12px; min-width:200px; z-index:1000; box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+    <div style="margin-bottom:8px; display:flex; gap:8px;">
+        <button id="col-select-all" class="btn-xs">全选</button>
+        <button id="col-deselect-all" class="btn-xs">清空</button>
+        <button id="col-reset" class="btn-xs">重置</button>
+    </div>
+    <div id="column-checkbox-list" style="max-height:200px; overflow-y:auto; display:flex; flex-direction:column; gap:4px;"></div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
