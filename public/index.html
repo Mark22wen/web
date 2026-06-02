@@ -2,307 +2,1058 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>科研教育人才一体化平台 · 数据研究</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>山东财经大学 · 科研教育人才一体化平台</title>
+    <link rel="icon" type="image/png" href="images/sdufe-logo.png">
+    <link rel="apple-touch-icon" href="images/sdufe-logo.png">
     <link rel="stylesheet" href="style.css">
-    <!-- 使用国内 CDN，避免存储警告，且速度更快 -->
-    <script src="https://cdn.bootcdn.net/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.20.2/xlsx.full.min.js"></script>
+    <!-- ECharts: staticfile CDN (China-friendly, backed by Qiniu) with cdnjs fallback -->
+    <script>
+      window.__echartsReady = false;
+    </script>
+    <script src="https://cdn.staticfile.org/echarts/5.4.3/echarts.min.js"
+            onerror="this.onerror=null;this.src='https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js'"></script>
+    <script src="https://cdn.bootcdn.net/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
+            onerror="this.onerror=null;this.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'"></script>
+    <script src="https://cdn.staticfile.org/three.js/r128/three.min.js"
+            onerror="this.onerror=null;this.src='https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'"></script>
 </head>
 <body>
 
-<div class="platform-header">
-    <div class="header-title">
-        <h1>📊 科研教育人才一体化平台 · 数据研究</h1>
-        <p>主图表联动 | 独立饼图轮播 | 排名对比图 | 表格列筛选 | 鼠标悬停暂停轮播</p>
-    </div>
-    <div style="position: absolute; top: 20px; right: 20px;">
-        <button id="darkModeToggle" class="btn-sm">🌙 夜间模式</button>
-    </div>
-</div>
-<div id="agent-modal" style="display: none; position: fixed; z-index: 2000;">
-    <div style="width: 800px; background: white; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
-        <!-- 头部 -->
-        <div id="agent-modal-header" style="cursor: move; padding: 12px 16px; border-bottom: 1px solid #eef2f8; display: flex; justify-content: space-between;">
-            <span>🤖 Agent 分析图表</span>
-            <button id="agent-modal-close" style="background: none; border: none; font-size: 20px;">&times;</button>
-        </div>
-        <!-- 主体 -->
-        <div id="agent-modal-body" style="padding: 16px;">
-            <div id="agent-modal-chart" style="height: 400px; width: 100%;"></div>
-        </div>
-    </div>
-</div>
-    <!-- 缩放把手 -->
-    <div id="chat-resize" style="position: absolute; right: 0; bottom: 0; width: 15px; height: 15px; cursor: nw-resize; background: #ccc; border-radius: 0 0 8px 0;"></div>
-</div>
+<!-- ========== SVG DEFS ========== -->
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sealGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c4952a"/>
+      <stop offset="100%" stop-color="#f0d060"/>
+    </linearGradient>
+    <symbol id="ico-hex" viewBox="0 0 32 32">
+      <path d="M16 2 L28 9 L28 23 L16 30 L4 23 L4 9 Z" fill="none" stroke="url(#sealGold)" stroke-width="1.8"/>
+      <path d="M16 6 L25 11 L25 21 L16 26 L7 21 L7 11 Z" fill="url(#sealGold)" opacity=".18"/>
+    </symbol>
+    <symbol id="ico-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+    </symbol>
+    <symbol id="ico-chart-bar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="12" width="4" height="8" rx="1"/><rect x="10" y="7" width="4" height="13" rx="1"/><rect x="17" y="3" width="4" height="17" rx="1"/>
+    </symbol>
+    <symbol id="ico-pie" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/>
+    </symbol>
+    <symbol id="ico-scatter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="7" cy="17" r="2"/><circle cx="17" cy="7" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="5" cy="7" r="2"/><circle cx="19" cy="17" r="2"/>
+    </symbol>
+    <symbol id="ico-arrow-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <path d="M5 12h14M12 5l7 7-7 7"/>
+    </symbol>
+    <symbol id="ico-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="15 18 9 12 15 6"/>
+    </symbol>
+    <symbol id="ico-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+    </symbol>
+    <symbol id="ico-brain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.44-4.66Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.44-4.66Z"/>
+    </symbol>
+    <symbol id="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </symbol>
+    <symbol id="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+    </symbol>
+    <symbol id="ico-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </symbol>
+    <symbol id="ico-db" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3S3 13.66 3 12"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
+    </symbol>
+    <symbol id="ico-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+    </symbol>
+    <symbol id="ico-table" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+    </symbol>
+    <symbol id="ico-msg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+    </symbol>
+    <symbol id="ico-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+    </symbol>
+    <symbol id="ico-src" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+    </symbol>
+    <symbol id="ico-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+    </symbol>
+    <symbol id="ico-chevdown" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="6 9 12 15 18 9"/>
+    </symbol>
+    <symbol id="ico-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+    </symbol>
+    <symbol id="ico-print" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
+    </symbol>
+    <symbol id="ico-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+    </symbol>
+  </defs>
+</svg>
 
-<div class="dashboard-container">
-    <div class="card">
-        <div class="card-header">
-            <span>🗂️ 数据工作表</span>
+<!-- ========== LANDING PAGE ========== -->
+<div id="landing-page" class="landing-page">
+    <canvas id="hero-canvas"></canvas>
+
+    <!-- Atmospheric overlays -->
+    <div class="lp-aurora lp-aurora-1"></div>
+    <div class="lp-aurora lp-aurora-2"></div>
+    <div class="lp-aurora lp-aurora-3"></div>
+    <div class="lp-grid-pattern"></div>
+
+    <!-- Nav -->
+    <nav class="landing-nav">
+        <div class="landing-logo">
+                <img
+                    src="images/sdufe-logo.png"
+                    alt="山东财经大学"
+                    class="logo-seal-img"
+                />
+            <div class="logo-text-group">
+                <span class="logo-univ">山东财经大学</span>
+                <span class="logo-platform">科研教育人才一体化平台</span>
+            </div>
+        </div>
+        <div class="landing-nav-right">
+            <button class="nav-link" onclick="scrollToFeatures()">功能介绍</button>
+            <button class="nav-cta" onclick="enterDashboard()">进入平台
+                <svg style="width:13px;height:13px;stroke:currentColor;vertical-align:-2px;margin-left:2px" viewBox="0 0 24 24" fill="none" stroke-width="2.5"><use href="#ico-arrow-right"/></svg>
+            </button>
+        </div>
+    </nav>
+
+    <!-- ===== HERO — Split Layout ===== -->
+    <section class="hero-section">
+
+        <!-- LEFT: Text + Search -->
+        <div class="hero-left">
+            <div class="hero-eyebrow">
+                <span class="eyebrow-dot"></span>
+                基于 RAG + Agent 的智能数据分析平台
+            </div>
+
+            <div class="hero-univ-badge">
+                <span class="univ-badge-inner">Shandong University of Finance and Economics</span>
+            </div>
+
+            <div class="hero-title">
+                <span class="hero-title-cn">科研教育人才</span>
+                <div class="hero-title-platform">一体化<em>数据平台</em></div>
+            </div>
+
+            <p class="hero-desc">
+                覆盖 <strong>190+</strong> 省市地区 · <strong>19</strong> 项核心指标 · 自然语言问答<br>
+                Agent 多工具调度 · RAG 精准溯源 · 趋势智能预测
+            </p>
+
+            <!-- Three pillars -->
+            <div class="hero-pillars">
+                <div class="pillar-item" onclick="enterDashboard('rag')">
+                    <div class="pillar-icon-wrap">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-brain"/></svg>
+                    </div>
+                    <div>
+                        <span class="pillar-name">RAG 问答</span>
+                        <span class="pillar-desc">精准检索溯源</span>
+                    </div>
+                </div>
+                <div class="pillar-sep"></div>
+                <div class="pillar-item" onclick="enterDashboard('rank')">
+                    <div class="pillar-icon-wrap">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-trend"/></svg>
+                    </div>
+                    <div>
+                        <span class="pillar-name">趋势分析</span>
+                        <span class="pillar-desc">多维指标可视化</span>
+                    </div>
+                </div>
+                <div class="pillar-sep"></div>
+                <div class="pillar-item" onclick="enterDashboard('scatter')">
+                    <div class="pillar-icon-wrap">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-scatter"/></svg>
+                    </div>
+                    <div>
+                        <span class="pillar-name">关联洞察</span>
+                        <span class="pillar-desc">地区相关性挖掘</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Search -->
+            <div class="hero-search-section">
+                <div class="hero-search">
+                    <svg class="search-prefix-icon" width="18" height="18"><use href="#ico-search"/></svg>
+                    <input id="landing-query" class="hero-input" placeholder="试试：近5年工业机器人密度趋势..."/>
+                    <button class="hero-send-btn" onclick="enterDashboardWithQuery()">
+                        <svg width="18" height="18"><use href="#ico-arrow-right"/></svg>
+                    </button>
+                </div>
+                <div class="hero-chips">
+                    <button class="chip" onclick="setLandingQuery('近5年工业机器人密度趋势')">
+                        <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-trend"/></svg>
+                        工业机器人趋势
+                    </button>
+                    <button class="chip" onclick="setLandingQuery('预测2026年普通高校数量')">
+                        <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-star"/></svg>
+                        高校数量预测
+                    </button>
+                    <button class="chip" onclick="setLandingQuery('江苏vs浙江专利对比')">
+                        <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-chart-bar"/></svg>
+                        省份对比
+                    </button>
+                    <button class="chip" onclick="setLandingQuery('2023年各省科学支出排名')">
+                        <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-db"/></svg>
+                        科学支出排名
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT: Data Viz Card -->
+        <div class="hero-right">
+            <div class="hero-viz-card">
+                <!-- Window chrome -->
+                <div class="viz-chrome">
+                    <div class="viz-chrome-dots">
+                        <div class="vcd vcd-r"></div>
+                        <div class="vcd vcd-y"></div>
+                        <div class="vcd vcd-g"></div>
+                    </div>
+                    <span class="viz-chrome-title">工业机器人密度 · 近5年趋势</span>
+                    <span class="viz-chrome-badge">● LIVE</span>
+                </div>
+
+                <!-- Chart body -->
+                <div class="viz-body">
+                    <div class="viz-chart-header">
+                        <div>
+                            <div style="font-size:.82rem;font-weight:700;color:rgba(240,232,210,.85);margin-bottom:2px;">工业机器人密度</div>
+                            <div class="viz-chart-label">台/万人（全国平均）</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div class="viz-chart-trend">↑ 31.8%</div>
+                            <div class="viz-chart-label">五年增幅</div>
+                        </div>
+                    </div>
+
+                    <!-- Animated bars -->
+                    <div style="display:flex;align-items:flex-end;gap:8px;height:72px;padding-bottom:2px;">
+                        <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">
+                            <div class="viz-bar" style="height:44px;width:100%;--delay:0s;"></div>
+                            <span style="font-size:.57rem;color:rgba(110,100,80,.55);">2020</span>
+                        </div>
+                        <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">
+                            <div class="viz-bar" style="height:51px;width:100%;--delay:.08s;"></div>
+                            <span style="font-size:.57rem;color:rgba(110,100,80,.55);">2021</span>
+                        </div>
+                        <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">
+                            <div class="viz-bar" style="height:57px;width:100%;--delay:.16s;"></div>
+                            <span style="font-size:.57rem;color:rgba(110,100,80,.55);">2022</span>
+                        </div>
+                        <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">
+                            <div class="viz-bar" style="height:63px;width:100%;--delay:.24s;"></div>
+                            <span style="font-size:.57rem;color:rgba(110,100,80,.55);">2023</span>
+                        </div>
+                        <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">
+                            <div class="viz-bar" style="height:71px;width:100%;--delay:.32s;"></div>
+                            <span style="font-size:.57rem;color:rgba(110,100,80,.55);">2024</span>
+                        </div>
+                    </div>
+
+                    <!-- Mini stat strip -->
+                    <div class="viz-mini-stats">
+                        <div class="viz-mini-stat">
+                            <div class="vms-n">2376</div>
+                            <div class="vms-l">2024年密度</div>
+                        </div>
+                        <div class="vms-sep"></div>
+                        <div class="viz-mini-stat">
+                            <div class="vms-n">19</div>
+                            <div class="vms-l">核心指标</div>
+                        </div>
+                        <div class="vms-sep"></div>
+                        <div class="viz-mini-stat">
+                            <div class="vms-n">190+</div>
+                            <div class="vms-l">覆盖地区</div>
+                        </div>
+                    </div>
+
+                    <!-- Progress metric list -->
+                    <div class="viz-metric-list">
+                        <div class="viz-metric-item">
+                            <span class="vmi-label">R&amp;D 投入强度</span>
+                            <div class="vmi-track"><div class="vmi-fill" style="--w:88%;--delay:.55s"></div></div>
+                            <span class="vmi-val">2.65%</span>
+                        </div>
+                        <div class="viz-metric-item">
+                            <span class="vmi-label">机器人密度增幅</span>
+                            <div class="vmi-track"><div class="vmi-fill" style="--w:72%;--delay:.7s"></div></div>
+                            <span class="vmi-val">+31.8%</span>
+                        </div>
+                        <div class="viz-metric-item">
+                            <span class="vmi-label">高校数据覆盖</span>
+                            <div class="vmi-track"><div class="vmi-fill" style="--w:94%;--delay:.85s"></div></div>
+                            <span class="vmi-val">94%</span>
+                        </div>
+                        <div class="viz-metric-item">
+                            <span class="vmi-label">省份表完整率</span>
+                            <div class="vmi-track"><div class="vmi-fill" style="--w:98%;--delay:1s"></div></div>
+                            <span class="vmi-val">98%</span>
+                        </div>
+                    </div>
+                </div><!-- /viz-body -->
+                <div class="viz-corner-glow"></div>
+            </div><!-- /hero-viz-card -->
+
+            <!-- Floating badge pills -->
+            <div class="hero-float-card hfc-1">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-brain"/></svg>
+                AI 智能问答
+            </div>
+            <div class="hero-float-card hfc-2">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-trend"/></svg>
+                趋势预测
+            </div>
+        </div><!-- /hero-right -->
+    </section>
+
+    <!-- Scroll hint -->
+    <div class="hero-scroll-hint" onclick="scrollToFeatures()">
+        <div class="scroll-pill">
+            <span>探索功能</span>
+            <div class="scroll-dot-track"><div class="scroll-dot"></div></div>
+        </div>
+    </div>
+
+    <!-- Stats bar -->
+    <div class="stats-bar">
+        <div class="stats-inner">
+            <div class="stat-block">
+                <span class="stat-n">190+</span>
+                <span class="stat-l">覆盖地区</span>
+            </div>
+            <div class="stat-sep"></div>
+            <div class="stat-block">
+                <span class="stat-n">19</span>
+                <span class="stat-l">核心指标</span>
+            </div>
+            <div class="stat-sep"></div>
+            <div class="stat-block">
+                <span class="stat-n">RAG</span>
+                <span class="stat-l">精准溯源</span>
+            </div>
+            <div class="stat-sep"></div>
+            <div class="stat-block">
+                <span class="stat-n">Agent</span>
+                <span class="stat-l">智能决策</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== 3D FEATURE CAROUSEL ===== -->
+    <section class="carousel-section" id="features-section">
+        <div class="section-eyebrow">核心功能</div>
+        <h2 class="section-title">四大智能模块</h2>
+        <p class="section-sub">从数据查询到智能预测，覆盖科研数据分析全场景</p>
+
+        <div class="carousel-3d-wrapper">
+            <div class="carousel-3d" id="carousel3d">
+                <div class="c3d-item" data-feature="rag" onclick="enterDashboard('rag')">
+                    <div class="c3d-glow"></div>
+                    <div class="c3d-icon-wrap">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-brain"/></svg>
+                    </div>
+                    <h3>RAG 智能问答</h3>
+                    <p>Agent 多工具调度，规则 + AI 双引擎，精准溯源，上下文记忆，支持多轮对话</p>
+                    <div class="c3d-badge">核心功能</div>
+                    <div class="c3d-enter">进入
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#ico-arrow-right"/></svg>
+                    </div>
+                </div>
+                <div class="c3d-item" data-feature="rank" onclick="enterDashboard('rank')">
+                    <div class="c3d-glow"></div>
+                    <div class="c3d-icon-wrap">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-chart-bar"/></svg>
+                    </div>
+                    <h3>数据看板</h3>
+                    <p>省份/全国多维指标，轮播折线/柱状图，动态排名对比，实时交互探索</p>
+                    <div class="c3d-enter">进入
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#ico-arrow-right"/></svg>
+                    </div>
+                </div>
+                <div class="c3d-item" data-feature="pie" onclick="enterDashboard('pie')">
+                    <div class="c3d-glow"></div>
+                    <div class="c3d-icon-wrap">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-pie"/></svg>
+                    </div>
+                    <h3>占比分析</h3>
+                    <p>总-分结构饼图，省份占比轮播，支持隐藏/显示单独省份扇区交互操作</p>
+                    <div class="c3d-enter">进入
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#ico-arrow-right"/></svg>
+                    </div>
+                </div>
+                <div class="c3d-item" data-feature="scatter" onclick="enterDashboard('scatter')">
+                    <div class="c3d-glow"></div>
+                    <div class="c3d-icon-wrap">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-scatter"/></svg>
+                    </div>
+                    <h3>关联分析</h3>
+                    <p>双指标散点图，地区气泡标注，揭示科研投入与产出之间的深层相关性</p>
+                    <div class="c3d-enter">进入
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#ico-arrow-right"/></svg>
+                    </div>
+                </div>
+            </div>
+            <button class="carousel-arrow left" id="c3d-prev" onclick="carouselPrev()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <button class="carousel-arrow right" id="c3d-next" onclick="carouselNext()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>
+            </button>
+            <div class="carousel-dots" id="carouselDots"></div>
+        </div>
+    </section>
+
+    <!-- ===== CAPABILITY GRID ===== -->
+    <section class="capability-grid-section">
+        <div style="text-align:center;margin-bottom:48px;">
+            <div class="section-eyebrow">平台能力</div>
+            <h2 class="section-title">全方位数据智能</h2>
+            <p class="section-sub">山东财经大学科研数据生态，一站式覆盖查询、分析、预测全链路</p>
+        </div>
+        <div class="cap-grid">
+            <!-- Large feature card -->
+            <div class="cap-card cap-large" onclick="enterDashboard('rag')" style="cursor:pointer;">
+                <div class="cap-icon" style="width:58px;height:58px;border-radius:17px;margin-bottom:18px;">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#ico-brain"/></svg>
+                </div>
+                <h3>AI 智能问答中心</h3>
+                <p>基于 RAG 检索增强生成 + Agent 多工具决策调度。用自然语言直达数据洞察——无需 SQL，无需编程，告别繁琐查询步骤。</p>
+                <div class="cap-tag-row">
+                    <span class="cap-tag">RAG 检索</span>
+                    <span class="cap-tag">Agent 调度</span>
+                    <span class="cap-tag">上下文记忆</span>
+                    <span class="cap-tag">精准溯源</span>
+                </div>
+                <div class="cap-arrow" style="margin-top:auto;padding-top:20px;font-size:.82rem;color:rgba(196,149,42,.55);display:flex;align-items:center;gap:6px;">
+                    立即体验
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#ico-arrow-right"/></svg>
+                </div>
+            </div>
+
+            <!-- Regular cards -->
+            <div class="cap-card" onclick="enterDashboard('rank')" style="cursor:pointer;">
+                <div class="cap-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-chart-bar"/></svg>
+                </div>
+                <div class="cap-arrow">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-arrow-right"/></svg>
+                </div>
+                <h3>多维数据看板</h3>
+                <p>省份与全国数据一键切换，折线/柱状图智能推荐，动态排名实时对比。</p>
+            </div>
+
+            <div class="cap-card" onclick="enterDashboard('pie')" style="cursor:pointer;">
+                <div class="cap-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-pie"/></svg>
+                </div>
+                <div class="cap-arrow">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-arrow-right"/></svg>
+                </div>
+                <h3>占比结构分析</h3>
+                <p>总量-分量双层饼图，省份扇区自由控显，一目了然掌握区域格局。</p>
+            </div>
+
+            <div class="cap-card" onclick="enterDashboard('scatter')" style="cursor:pointer;">
+                <div class="cap-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-scatter"/></svg>
+                </div>
+                <div class="cap-arrow">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-arrow-right"/></svg>
+                </div>
+                <h3>双指标关联</h3>
+                <p>散点气泡图揭示科研投入与产出相关性，地区标注，量化关联强度。</p>
+            </div>
+
+            <div class="cap-card" onclick="enterDashboard('rag')" style="cursor:pointer;">
+                <div class="cap-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-trend"/></svg>
+                </div>
+                <div class="cap-arrow">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-arrow-right"/></svg>
+                </div>
+                <h3>智能趋势预测</h3>
+                <p>基于历史序列推演未来走向，预测置信区间可视化，辅助科研决策。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== CTA ===== -->
+    <section class="landing-cta-section">
+        <div class="cta-card">
+            <!-- Decorative emblem -->
+            <div class="cta-emblem">
+                <svg width="48" height="56" viewBox="0 0 38 44">
+                    <defs>
+                        <linearGradient id="ctaGold" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#c4952a"/>
+                            <stop offset="100%" stop-color="#f0d060"/>
+                        </linearGradient>
+                    </defs>
+                    <polygon points="19,2 36,11 36,33 19,42 2,33 2,11" fill="none" stroke="url(#ctaGold)" stroke-width="1.2"/>
+                    <polygon points="19,7 31,14 31,30 19,37 7,30 7,14" fill="url(#ctaGold)" opacity=".1"/>
+                    <text x="19" y="22" text-anchor="middle" dominant-baseline="central" fill="url(#ctaGold)" font-size="10" font-weight="700" font-family="serif">财</text>
+                    <text x="19" y="32" text-anchor="middle" dominant-baseline="central" fill="rgba(196,149,42,.45)" font-size="6" font-family="serif">经</text>
+                </svg>
+            </div>
+            <h2>立即开始数据探索</h2>
+            <p>从一个问题出发，发现中国科研的发展脉络</p>
+            <div class="cta-btns">
+                <button class="cta-primary" onclick="enterDashboard('rag')">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-brain"/></svg>
+                    开始智能问答
+                </button>
+                <button class="cta-secondary" onclick="enterDashboard()">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-chart-bar"/></svg>
+                    查看数据看板
+                </button>
+            </div>
+        </div>
+    </section>
+
+</div><!-- /landing-page -->
+
+<!-- ========== DASHBOARD PAGE ========== -->
+<div id="dashboard-page" class="dashboard-page" style="display:none;">
+
+    <header class="dash-header">
+        <div class="dash-header-left">
+            <button class="dash-back" onclick="showLanding()" title="返回首页">
+                <svg width="16" height="16"><use href="#ico-back"/></svg>
+            </button>
+            <div class="dash-brand">
+                <svg class="dash-brand-hex"><use href="#ico-hex"/></svg>
+                <div class="dash-brand-info">
+                    <div class="dash-brand-name">科研教育数据平台</div>
+                    <div class="dash-brand-sub">主图表 · 饼图轮播 · 排名对比 · 智能问答</div>
+                </div>
+            </div>
+        </div>
+        <div class="dash-header-right">
+            <button class="dash-btn dash-btn-primary" onclick="openRagFullscreen()">
+                <svg width="14" height="14"><use href="#ico-chat"/></svg>
+                AI 问答
+            </button>
+            <button id="darkModeToggle" class="dash-btn">
+                <svg width="14" height="14" id="dark-icon"><use href="#ico-moon"/></svg>
+                <span id="dark-label">夜间</span>
+            </button>
+        </div>
+    </header>
+
+    <div class="dash-body">
+
+        <!-- KPI Row -->
+        <div class="kpi-row" id="kpi-row">
+            <div class="kpi-card" style="--kpi-color:linear-gradient(90deg,#b2bef3,#831beb);--kpi-bg:rgba(102,126,234,.1);--kpi-stroke:#667eea">
+                <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-db"/></svg></div>
+                <div class="kpi-value" id="kpi-records">—</div>
+                <div class="kpi-label">数据记录总数</div>
+                <div class="kpi-delta neutral">省份表</div>
+            </div>
+            <div class="kpi-card" style="--kpi-color:linear-gradient(90deg,#4facfe,#00f2fe);--kpi-bg:rgba(79,172,254,.1);--kpi-stroke:#4facfe">
+                <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-clock"/></svg></div>
+                <div class="kpi-value" id="kpi-years">—</div>
+                <div class="kpi-label">年份跨度</div>
+                <div class="kpi-delta neutral">全部表</div>
+            </div>
+            <div class="kpi-card" style="--kpi-color:linear-gradient(90deg,#48bb78,#38a169);--kpi-bg:rgba(72,187,120,.1);--kpi-stroke:#48bb78">
+                <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-trend"/></svg></div>
+                <div class="kpi-value" id="kpi-metrics">—</div>
+                <div class="kpi-label">核心指标数</div>
+                <div class="kpi-delta up">已覆盖</div>
+            </div>
+            <div class="kpi-card" style="--kpi-color:linear-gradient(90deg,#ffffff,#ffffff);--kpi-bg:rgba(120, 194, 255, 0.692);--kpi-stroke:#ed8936">
+                <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-search"/></svg></div>
+                <div class="kpi-value" id="kpi-regions">—</div>
+                <div class="kpi-label">覆盖省份/城市</div>
+                <div class="kpi-delta neutral">地区表</div>
+            </div>
+        </div>
+
+        <!-- Sheet select -->
+        <div class="dash-toolbar-card">
+            <label class="toolbar-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-db"/></svg>
+                数据工作表
+            </label>
             <select id="sheet-list" class="sheet-select"></select>
         </div>
+
+        <!-- Main Chart Card -->
+        <div class="dash-card" id="section-chart">
+            <div class="dash-card-header">
+                <span class="dash-card-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-trend"/></svg>
+                    主图表
+                    <span class="card-title-badge">实时交互</span>
+                </span>
+                <div class="dash-card-actions">
+                    <div class="tool-pill">
+                        <label>类型</label>
+                        <select id="chart-type">
+                            <option value="auto">智能</option>
+                            <option value="line">折线</option>
+                            <option value="bar">柱状</option>
+                        </select>
+                    </div>
+                    <div class="tool-pill">
+                        <label>标题</label>
+                        <input id="chart-title" placeholder="自动" style="width:100px">
+                    </div>
+                    <button id="apply-set" class="action-btn">应用</button>
+                    <button id="reset-set" class="action-btn ghost">重置</button>
+                    <span class="help-dot" title="智能推荐：全国用折线图，省份/地级市用柱状图。自定义轴名称和最大值后点应用生效。">?</span>
+                </div>
+            </div>
+            <div class="chart-main-layout">
+                <div class="indicator-panel" id="dynamic-panel">
+                    <h4 id="panel-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
+                        指标列表
+                    </h4>
+                    <div id="metric-selector-container" class="panel-section">
+                        <label class="panel-label">当前指标</label>
+                        <select id="main-metric-select" style="width:100%;margin-top:4px;"></select>
+                    </div>
+                    <div id="group-actions" class="panel-section panel-btn-row">
+                        <button id="select-all" class="mini-btn">全选</button>
+                        <button id="invert-select" class="mini-btn">反选</button>
+                        <button id="reset-select" class="mini-btn">重置</button>
+                        <button id="clear-select" class="mini-btn">清空</button>
+                    </div>
+                    <div id="region-search-container" class="panel-section" style="display:none;gap:6px;align-items:center;">
+                        <input type="text" id="region-search" placeholder="搜索地区" style="flex:1;">
+                        <button id="clear-search-btn" class="mini-btn">清除</button>
+                    </div>
+                    <div id="quick-jump-container" class="panel-section" style="display:none;">
+                        <label class="panel-label">快速跳转</label>
+                        <select id="quick-jump-region" style="width:100%;margin-top:4px;"><option value="">-- 选择地区 --</option></select>
+                    </div>
+                    <div id="indicator-list" class="indicator-list"></div>
+                </div>
+                <div class="right-chart">
+                    <div id="main-chart" style="height:100%;width:100%;"></div>
+                </div>
+            </div>
+            <div class="axis-row">
+                <input id="x-name" placeholder="X轴名称">
+                <input id="y-name" placeholder="Y轴名称">
+                <input id="y-max" placeholder="Y轴最大值" type="number" step="any">
+                <div class="export-row">
+                    <span class="export-label">导出</span>
+                    <button id="export-main-png" class="mini-btn">PNG</button>
+                    <button id="export-main-jpg" class="mini-btn">JPG</button>
+                    <button id="export-main-svg" class="mini-btn">SVG</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pie Chart Card -->
+        <div class="dash-card pie-card" id="section-pie" style="display:none;">
+            <div class="dash-card-header">
+                <span class="dash-card-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-pie"/></svg>
+                    总-分结构饼图
+                </span>
+                <div class="dash-card-actions">
+                    <div class="tool-pill">
+                        <label>年份</label>
+                        <select id="pie-year-select"></select>
+                        <button id="pie-year-prev" class="icon-btn">◀</button>
+                        <button id="pie-year-next" class="icon-btn">▶</button>
+                    </div>
+                    <div class="tool-pill">
+                        <label>指标</label>
+                        <select id="pie-metric-select"></select>
+                    </div>
+                    <button id="pie-reset-hidden" class="action-btn ghost">
+                        <svg width="12" height="12"><use href="#ico-refresh"/></svg>
+                        重置
+                    </button>
+                    <span class="help-dot" title="左侧省份列表勾选显示单独扇区；取消勾选合并为「已隐藏省份」扇区；图例点击可同步省份面板。">?</span>
+                </div>
+            </div>
+            <div style="display:flex;gap:16px;padding:16px;">
+                <div class="indicator-panel" style="width:240px;">
+                    <h4>省份列表</h4>
+                    <div class="panel-section panel-btn-row">
+                        <button id="pie-select-all" class="mini-btn">全选</button>
+                        <button id="pie-invert-select" class="mini-btn">反选</button>
+                        <button id="pie-reset-select" class="mini-btn">重置</button>
+                        <button id="pie-clear-select" class="mini-btn">清空</button>
+                    </div>
+                    <div id="pie-province-list" class="indicator-list" style="max-height:320px;"></div>
+                </div>
+                <div id="pie-chart" style="flex:1;height:400px;"></div>
+            </div>
+            <div id="pie-status" class="status-bar"></div>
+            <div class="export-footer">
+                <span class="export-label">导出饼图</span>
+                <button id="export-pie-png" class="mini-btn">PNG</button>
+                <button id="export-pie-jpg" class="mini-btn">JPG</button>
+                <button id="export-pie-svg" class="mini-btn">SVG</button>
+            </div>
+        </div>
+
+        <!-- Advanced Card -->
+        <div class="dash-card advanced-card" id="section-advanced" style="display:none;">
+            <div class="dash-card-header">
+                <span class="dash-card-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg>
+                    高级分析
+                    <span class="card-title-badge">AI 增强</span>
+                </span>
+                <div class="dash-card-actions" id="advanced-toolbar"></div>
+            </div>
+            <div id="advanced-content" style="min-height:440px;padding:16px;display:flex;gap:16px;"></div>
+            <div class="export-footer">
+                <span class="export-label">导出</span>
+                <button id="export-adv-png" class="mini-btn">PNG</button>
+                <button id="export-adv-jpg" class="mini-btn">JPG</button>
+                <button id="export-adv-svg" class="mini-btn">SVG</button>
+            </div>
+        </div>
+
+        <!-- Analysis tool cards -->
+        <div id="section-scatter" style="display:none;">
+            <div class="section-divider">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-scatter"/></svg>
+                散点图分析
+            </div>
+            <div class="analysis-cards-row">
+                <div class="analysis-card-entry" data-chart="scatter">
+                    <div class="ace-icon-wrap">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-scatter"/></svg>
+                    </div>
+                    <div class="ace-body">
+                        <div class="ace-title">双指标关联散点图</div>
+                        <div class="ace-desc">选择两个指标，分析地区间的相关性</div>
+                    </div>
+                    <button class="ace-btn" onclick="openAnalysisPanel('scatter')">展开分析</button>
+                </div>
+            </div>
+            <div id="analysis-panel" style="display:none;">
+                <div class="analysis-panel-header">
+                    <span id="panel-title">散点图分析</span>
+                    <div style="display:flex;gap:8px;">
+                        <button id="export-chart-png" class="mini-btn">PNG</button>
+                        <button id="export-chart-jpg" class="mini-btn">JPG</button>
+                        <button id="export-chart-svg" class="mini-btn">SVG</button>
+                        <button id="close-panel" class="close-btn">收起</button>
+                    </div>
+                </div>
+                <div id="analysis-controls" class="analysis-controls"></div>
+                <div id="analysis-chart" style="height:480px;"></div>
+            </div>
+        </div>
+
+        <!-- Data Table -->
+        <div class="dash-card" id="section-table">
+            <div class="dash-card-header">
+                <span class="dash-card-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-table"/></svg>
+                    数据明细表
+                </span>
+                <div class="dash-card-actions">
+                    <div class="tool-pill" id="column-selector-btn">
+                        <label>列</label>
+                        <button id="toggle-column-panel" class="mini-btn">筛选</button>
+                        <span class="help-dot" title="点击「筛选」按钮弹出面板，勾选要显示的列。支持全选/清空/重置。">?</span>
+                    </div>
+                    <div class="tool-pill">
+                        <label>每页</label>
+                        <select id="page-size-select">
+                            <option value="20">20</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <button id="clear-sort" class="mini-btn">清排序</button>
+                    <button id="reset-table" class="mini-btn">重置</button>
+                    <button id="export-csv" class="action-btn">CSV</button>
+                    <button id="export-excel" class="action-btn">Excel</button>
+                    <button id="print-table" class="mini-btn ghost">
+                        <svg width="13" height="13"><use href="#ico-print"/></svg>
+                        打印
+                    </button>
+                    <span class="help-dot" title="表格列颜色代表数值热力图：颜色越深表示该列数值越高。悬停单元格可查看具体排位百分比。">?</span>
+                </div>
+            </div>
+            <div class="data-section">
+                <div class="table-toolbar">
+                    <input id="search-input" type="text" placeholder="搜索表格内容" class="search-input">
+                    <div class="scale-ctrl">
+                        <span class="scale-label">缩放</span>
+                        <input type="range" id="table-scale" min="0.6" max="1.2" step="0.05" value="1">
+                        <span id="scale-text">100%</span>
+                    </div>
+                    <div id="sort-status" class="sort-status">点击表头排序</div>
+                </div>
+                <div class="table-container">
+                    <div class="table-wrap">
+                        <table id="data-table">
+                            <thead><tr><th>加载中...</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="pagination-bar">
+                    <button id="page-first" class="pg-btn">⏮</button>
+                    <button id="page-prev" class="pg-btn">◀</button>
+                    <span class="pg-info">第 <strong id="page-current">1</strong> / <strong id="page-total">1</strong> 页</span>
+                    <button id="page-next" class="pg-btn">▶</button>
+                    <button id="page-last" class="pg-btn">⏭</button>
+                    <input type="number" id="page-goto" min="1" class="pg-input">
+                    <button id="page-go" class="pg-btn">GO</button>
+                    <span class="pg-total">共 <strong id="total-records">0</strong> 条</span>
+                </div>
+            </div>
+        </div>
+
+        <footer class="dash-footer">© 山东财经大学 科研教育人才一体化平台 · 数据来源：公开统计数据库</footer>
     </div>
 
-    <div class="card">
-        <div class="card-header">
-            <div class="toolbar-group">
-                <div class="tool-item">
-                    <label>📈 图表类型</label>
-                    <select id="chart-type">
-                        <option value="auto">智能推荐</option>
-                        <option value="line">折线图</option>
-                        <option value="bar">柱状图</option>
-                    </select>
-                    <span class="help-icon" title="智能推荐：全国用折线图，省份/地级市用柱状图。">❓</span>
-                </div>
-            </div>
-            <div class="toolbar-group">
-                <div class="tool-item">
-                    <label>🎨 标题自定义</label>
-                    <input id="chart-title" placeholder="图表标题（自动）" style="width:140px">
-                </div>
-                <button id="apply-set" class="btn-sm">应用</button>
-                <button id="reset-set" class="btn-sm">重置</button>
-            </div>
+    <!-- Column panel -->
+    <div id="column-panel" class="column-panel" style="display:none;">
+        <div class="col-panel-actions">
+            <button id="col-select-all" class="mini-btn">全选</button>
+            <button id="col-deselect-all" class="mini-btn">清空</button>
+            <button id="col-reset" class="mini-btn">重置</button>
         </div>
-        <div class="chart-main-layout">
-            <div class="indicator-panel" id="dynamic-panel">
-                <h4 id="panel-title">指标列表</h4>
-                <!-- 唯一的指标下拉框容器 -->
-                <div id="metric-selector-container" style="padding: 8px 16px; border-bottom: 1px solid #eef2f8;">
-                    <label>📊 当前指标：</label>
-                    <select id="main-metric-select" style="width: 100%; margin-top: 4px;"></select>
-                </div>
-                <div id="group-actions" style="padding: 8px 16px; display: flex; gap: 8px; border-bottom: 1px solid #eef2f8;">
-                    <button id="select-all" class="btn-xs">全选</button>
-                    <button id="invert-select" class="btn-xs">反选</button>
-                    <button id="reset-select" class="btn-xs">重置</button>
-                    <button id="clear-select" class="btn-xs">清空</button>
-                </div>
-                <div id="region-search-container" style="padding: 8px 16px; border-bottom: 1px solid #eef2f8; display: flex; gap: 8px; align-items: center;">
-                    <input type="text" id="region-search" placeholder="🔍 搜索地区" style="flex:1; padding:6px 8px;">
-                    <button id="clear-search-btn" class="btn-xs" style="padding: 4px 8px;">✖ 清空搜索</button>
-                </div>
-                <!-- 快速跳转下拉框 -->
-                <div id="quick-jump-container" style="padding: 8px 16px; border-bottom: 1px solid #eef2f8;">
-                    <label>📍 快速跳转：</label>
-                    <select id="quick-jump-region" style="width: 100%; margin-top: 4px;">
-                        <option value="">-- 选择地区 --</option>
-                    </select>
-                </div>
-                <div id="indicator-list" class="indicator-list"></div>
-            </div>
-            <div class="right-chart">
-                <div id="main-chart" style="height: 100%; width: 100%;"></div>
-            </div>
-        </div>
-        <div class="axis-control">
-            <input id="x-name" placeholder="X轴名称（自动）">
-            <input id="y-name" placeholder="Y轴名称（自动）">
-            <input id="y-max" placeholder="Y轴最大值（自动）" type="number" step="any">
-        </div>
-        <div class="chart-export-toolbar" style="padding: 8px 20px 20px; display: flex; gap: 12px;">
-            <span>导出主图表：</span>
-            <button id="export-main-png" class="btn-sm">PNG</button>
-            <button id="export-main-jpg" class="btn-sm">JPG</button>
-            <button id="export-main-svg" class="btn-sm">SVG</button>
-        </div>
-    </div>
-
-    <div class="card pie-card" style="display: none;">
-        <div class="card-header">
-            <span>🥧 总-分结构饼图</span>
-            <div class="toolbar-group">
-                <div class="tool-item">
-                    <label>📅 年份</label>
-                    <select id="pie-year-select"></select>
-                    <button id="pie-year-prev" class="btn-icon">◀</button>
-                    <button id="pie-year-next" class="btn-icon">▶</button>
-                </div>
-                <div class="tool-item">
-                    <label>📊 指标</label>
-                    <select id="pie-metric-select"></select>
-                </div>
-                <button id="pie-reset-hidden" class="btn-sm">↺ 重置隐藏</button>
-                <span class="help-icon" title="左侧省份列表勾选显示单独扇区；取消勾选的省份合并为「已隐藏省份」扇区；图例点击可隐藏/显示对应省份（与左侧同步）。">❓</span>
-            </div>
-        </div>
-        <div style="display: flex; gap: 20px; padding: 12px;">
-            <div class="indicator-panel" style="width: 260px;">
-                <h4>📋 省份列表（勾选显示单独扇区）<span class="help-icon" title="勾选后饼图显示该省份单独扇区；取消勾选合并到「已隐藏省份」扇区。">❓</span></h4>
-                <div id="pie-group-actions" style="padding: 8px 12px; display: flex; gap: 8px; flex-wrap: wrap;">
-                    <button id="pie-select-all" class="btn-xs">全选</button>
-                    <button id="pie-invert-select" class="btn-xs">反选</button>
-                    <button id="pie-reset-select" class="btn-xs">重置</button>
-                    <button id="pie-clear-select" class="btn-xs">清空</button>
-                </div>
-                <div id="pie-province-list" class="indicator-list" style="max-height: 320px;"></div>
-            </div>
-            <div id="pie-chart" style="flex: 1; height: 420px;"></div>
-        </div>
-        <div id="pie-status" style="padding: 8px 20px 20px; font-size:0.8rem; color:#5a6e8a; text-align:center;"></div>
-        <div style="padding: 0 20px 16px 20px; font-size:0.75rem; color:#999; border-top:1px solid #eef2f8;">
-            📌 注：本研究数据暂不包含香港、澳门、台湾地区。
-        </div>
-        <div class="chart-export-toolbar" style="padding: 8px 20px 20px; display: flex; gap: 12px;">
-            <span>导出饼图：</span>
-            <button id="export-pie-png" class="btn-sm">PNG</button>
-            <button id="export-pie-jpg" class="btn-sm">JPG</button>
-            <button id="export-pie-svg" class="btn-sm">SVG</button>
-        </div>
-    </div>
-
-    <div class="card advanced-card" style="display: none;">
-        <div class="card-header">
-            <span>🔬 高级可视化分析 <span style="font-weight:normal; font-size:0.75rem;">(独立轮播)</span></span>
-            <div class="toolbar-group" id="advanced-toolbar"></div>
-        </div>
-        <div id="advanced-content" style="min-height: 460px; width: 100%; padding: 12px; display: flex; gap: 20px;"></div>
-        <div id="advanced-controls" style="padding: 0 20px 20px 20px; display: flex; gap: 12px; flex-wrap: wrap;"></div>
-        <div class="chart-export-toolbar" style="padding: 8px 20px 20px; display: flex; gap: 12px;">
-            <span>导出当前分析图：</span>
-            <button id="export-adv-png" class="btn-sm">PNG</button>
-            <button id="export-adv-jpg" class="btn-sm">JPG</button>
-            <button id="export-adv-svg" class="btn-sm">SVG</button>
-        </div>
-    </div>
-<!-- 高级分析卡片区（小矩形卡片并排） -->
-<div class="analysis-cards">
-    <div class="card-item" data-chart="scatter">
-        <div class="card-icon">⚫</div>
-        <div class="card-title">散点图</div>
-        <div class="card-desc">两指标关联</div>
-        <button class="view-btn">查看 →</button>
+        <div id="column-checkbox-list" class="col-list"></div>
     </div>
 </div>
 
-<!-- 分析详情面板（初始隐藏，点击查看后展开） -->
-<div id="analysis-panel" style="display: none;">
-    <div class="panel-header">
-        <span id="panel-title">展示</span>
-        <div>
-            <button id="export-chart-png" class="btn-sm" style="margin-right: 8px;">📸 PNG</button>
-            <button id="export-chart-jpg" class="btn-sm" style="margin-right: 8px;">📸 JPG</button>
-            <button id="export-chart-svg" class="btn-sm">📸 SVG</button>
-            <button id="close-panel" class="close-btn">← 隐藏区域</button>
+<!-- ========== RAG FULLSCREEN ========== -->
+<div id="rag-fullscreen" class="rag-fullscreen" style="display:none;">
+    <!-- Sidebar -->
+    <aside class="rag-sidebar">
+        <div class="rag-brand">
+            <svg class="rag-brand-hex"><use href="#ico-hex"/></svg>
+            <span class="rag-brand-title">AI 分析助手</span>
         </div>
-    </div>
-    <div id="analysis-controls" class="analysis-controls"></div>
-    <div id="analysis-chart" style="height: 500px;"></div>
+
+        <button class="new-chat-btn" onclick="startNewSession()">
+            <svg width="14" height="14"><use href="#ico-plus"/></svg>
+            新建对话
+        </button>
+
+        <div class="sidebar-section">
+            <div class="sidebar-section-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-clock"/></svg>
+                对话记录
+            </div>
+            <div id="rag-session-list" class="session-list"></div>
+        </div>
+
+        <div class="sidebar-section">
+            <div class="sidebar-section-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>
+                快捷提问
+            </div>
+            <button class="quick-q" onclick="sendRagQuick('2023年各省科学支出排名')">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
+                2023年科学支出排名
+            </button>
+            <button class="quick-q" onclick="sendRagQuick('近5年工业机器人密度趋势')">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-trend"/></svg>
+                工业机器人趋势
+            </button>
+            <button class="quick-q" onclick="sendRagQuick('预测2026年普通高校数量')">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>
+                高校数量预测
+            </button>
+            <button class="quick-q" onclick="sendRagQuick('江苏和浙江专利对比')">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-scatter"/></svg>
+                省份对比分析
+            </button>
+        </div>
+
+        <div class="sidebar-footer">
+            <button class="sidebar-back-btn" onclick="closeRagFullscreen()">
+                <svg width="13" height="13"><use href="#ico-back"/></svg>
+                返回数据看板
+            </button>
+        </div>
+    </aside>
+
+    <!-- Main chat area -->
+    <main class="rag-main">
+        <div class="rag-topbar">
+            <button class="rag-back-mobile" onclick="closeRagFullscreen()">
+                <svg width="18" height="18"><use href="#ico-back"/></svg>
+            </button>
+            <span class="rag-session-name" id="rag-session-title">AI 分析助手</span>
+            <div class="rag-caps">
+                <span class="rag-cap-chip">RAG 检索</span>
+                <span class="rag-cap-chip">Agent 决策</span>
+                <span class="rag-cap-chip">趋势预测</span>
+            </div>
+            <button id="darkModeToggle2" class="rag-dark-btn">
+                <svg width="14" height="14" id="dark-icon2"><use href="#ico-moon"/></svg>
+                <span id="dark-label2">夜间</span>
+            </button>
+        </div>
+
+        <div class="rag-messages" id="rag-messages">
+            <div class="rag-welcome">
+                <div class="rag-welcome-avatar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg>
+                </div>
+                <h2>我是你的数据分析助手</h2>
+                <p>查询数据 · 分析趋势 · 对比地区 · 预测未来<br>所有回答均基于平台数据，附带来源溯源。</p>
+                <div class="rag-welcome-hints">
+                    <button class="rag-hint-btn" onclick="sendRagQuick('近5年工业机器人密度趋势')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-trend"/></svg>
+                        近5年工业机器人密度趋势
+                    </button>
+                    <button class="rag-hint-btn" onclick="sendRagQuick('2023年各省科学支出前10排名')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
+                        2023年各省科学支出排名
+                    </button>
+                    <button class="rag-hint-btn" onclick="sendRagQuick('预测2026年全国普通高校数量')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>
+                        预测2026年高校数量
+                    </button>
+                    <button class="rag-hint-btn" onclick="sendRagQuick('江苏和浙江R&D投入强度对比')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-scatter"/></svg>
+                        江苏vs浙江R&D投入对比
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="rag-composer">
+            <div class="rag-hint-bar" id="rag-context-hint">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg>
+                <span>支持上下文追问 · 无地区时默认全国数据</span>
+            </div>
+            <div class="composer-box">
+                <textarea id="rag-input" rows="1" placeholder="输入数据问题...（Enter 发送，Shift+Enter 换行）"></textarea>
+                <button id="rag-send" class="composer-send" aria-label="发送">
+                    <svg width="18" height="18"><use href="#ico-arrow-right"/></svg>
+                </button>
+            </div>
+            <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · 支持追问上文</div>
+        </div>
+    </main>
 </div>
 
-    <div class="card">
-        <div class="card-header">
-            <span>📋 明细数据表（当前工作表）</span>
-            <div class="toolbar-group">
-                <div class="tool-item" id="column-selector-btn">
-                    <label>📊 显示列</label>
-                    <button id="toggle-column-panel" class="btn-xs">选择列</button>
-                    <span class="help-icon" title="点击按钮弹出面板，勾选要显示的列，支持全选/清空/重置。">❓</span>
-                </div>
-                <div class="tool-item">
-                    <label>每页行数</label>
-                    <select id="page-size-select">
-                        <option value="20">20</option>
-                        <option value="50">50</option>
-                        <option value="100">100</option>
-                    </select>
-                    <span class="help-icon" title="调整表格每页显示的行数。">❓</span>
-                </div>
-                <button id="clear-sort" class="btn-sm">🗑️ 清除排序</button>
-                <button id="reset-table" class="btn-sm">🔄 重置表格</button>
-                <button id="export-csv" class="btn-sm">📎 CSV (.csv)</button>
-                <button id="export-excel" class="btn-sm">📑 Excel (.xlsx)</button>
-                <button id="print-table" class="btn-sm">🖨️ 打印表格</button>
-            </div>
-        </div>
-        <div class="data-section">
-            <div class="table-toolbar">
-                <input id="search-input" type="text" placeholder="🔍 搜索表格内容" class="search-input">
-                <div class="scale-control">
-                    <span>表格缩放</span>
-                    <input type="range" id="table-scale" min="0.6" max="1.2" step="0.05" value="1">
-                    <span id="scale-text">100%</span>
-                    <span class="help-icon" title="调整表格显示大小，同时自动调整每页行数（缩放越大页显示行数越多）。">❓</span>
-                </div>
-                <div id="sort-status" style="font-size:0.75rem; color:#5a6e8a;">⚡ 当前排序：无（点击表头排序）</div>
-            </div>
-            <div class="table-container">
-                <div class="table-wrap">
-                    <table id="data-table">
-                        <thead><tr><th>加载中...</th></tr></thead>
-                        <tbody></tbody>
-                    </table>
-                </div>
-            </div>
-            <div class="pagination-bar">
-                <button id="page-first" class="page-btn">⏮ 首页</button>
-                <button id="page-prev" class="page-btn">◀ 上一页</button>
-                <span>第 <span id="page-current">1</span> 页 / 共 <span id="page-total">1</span> 页</span>
-                <button id="page-next" class="page-btn">下一页 ▶</button>
-                <button id="page-last" class="page-btn">末页 ⏭</button>
-                <span style="margin-left:12px">跳转至</span>
-                <input type="number" id="page-goto" min="1" style="width:60px"> 页
-                <button id="page-go" class="page-btn">GO</button>
-                <span style="margin-left:12px">总记录: <span id="total-records">0</span></span>
-            </div>
-        </div>
-    </div>
-    <footer>© 科研教育人才一体化平台 · 鼠标悬停图表时轮播暂停 | 问号图标可查看功能说明</footer>
-</div>
-
-<!-- 列选择器弹出面板 -->
-<div id="column-panel" style="display:none; position:fixed; background:white; border:1px solid #dce3ec; border-radius:12px; padding:12px; min-width:200px; z-index:1000; box-shadow:0 4px 12px rgba(0,0,0,0.15);">
-    <div style="margin-bottom:8px; display:flex; gap:8px;">
-        <button id="col-select-all" class="btn-xs">全选</button>
-        <button id="col-deselect-all" class="btn-xs">清空</button>
-        <button id="col-reset" class="btn-xs">重置</button>
-    </div>
-    <div id="column-checkbox-list" style="max-height:200px; overflow-y:auto; display:flex; flex-direction:column; gap:4px;"></div>
-</div>
-<!-- Agent 图表弹窗 -->
- <!-- 聊天面板（可拖动、可缩放） -->
-<div id="chat-panel" class="chat-panel" style="position: fixed; bottom: 20px; right: 20px; width: 350px; background: white; border: 1px solid #ccc; border-radius: 8px; display: flex; flex-direction: column; z-index: 1000; max-height: 500px;">
-    <!-- 可拖动的头部 -->
-    <div id="chat-header" style="padding: 12px; border-bottom: 1px solid #eee; font-weight: bold; cursor: move; background: #1e466e; color: white; border-radius: 8px 8px 0 0; display: flex; justify-content: space-between; align-items: center;">
-        <span>🤖 智能问答助手</span>
-        <div>
-            <button id="chat-minimize" style="background: none; border: none; color: white; cursor: pointer; font-size: 16px;">🗕</button>
-            <button id="chat-close" style="background: none; border: none; color: white; cursor: pointer; font-size: 18px;">&times;</button>
-        </div>
-    </div>
-    <!-- 可滚动内容区 -->
-    <div id="chat-body" style="flex: 1; overflow: hidden;">
-        <div id="chat-messages" style="height: 300px; overflow-y: auto; padding: 12px;"></div>
-        <div style="padding: 12px; border-top: 1px solid #eee;">
-            <textarea id="chat-input" rows="2" placeholder="输入问题..." style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #ccc; resize: none;"></textarea>
-            <div class="chat-buttons" style="display: flex; gap: 8px; margin-top: 8px;">
-                <button id="chat-send" style="flex:1;">发送</button>
-                <button id="chat-stop" style="flex:1; background: #999;" disabled>停止</button>
-                <button id="chat-clear" style="flex:1; background: #f0ad4e;">清空</button>
-            </div>
-        </div>
-    </div>
-    <!-- 缩放把手 -->
-    <div id="chat-resize" style="position: absolute; right: 0; bottom: 0; width: 15px; height: 15px; cursor: nw-resize; background: #ccc; border-radius: 0 0 8px 0;"></div>
-</div>
-<!-- Agent 图表弹窗（可拖动、可缩放） -->
-<div id="agent-modal" style="display: none; position: fixed; z-index: 2000;">
-    <div id="agent-modal-header" style="cursor: move; background: white; border-radius: 12px 12px 0 0; padding: 12px 16px; border-bottom: 1px solid #eef2f8; display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-weight: 600;">🤖 Agent 分析图表</span>
-        <div>
-            <button id="agent-modal-minimize" style="background: none; border: none; cursor: pointer; font-size: 16px; margin-right: 8px;">🗕</button>
-            <button id="agent-modal-close" style="background: none; border: none; cursor: pointer; font-size: 20px;">&times;</button>
-        </div>
-    </div>
-    <div id="agent-modal-body" style="background: white; border-radius: 0 0 12px 12px; padding: 16px;">
-        <div id="agent-modal-chart" style="height: 400px; width: 100%;"></div>
-    </div>
-    <div id="agent-modal-resize" style="position: absolute; right: 0; bottom: 0; width: 15px; height: 15px; cursor: nw-resize; background: #ccc; border-radius: 0 0 12px 0;"></div>
-</div>
+<!-- FAB -->
+<button id="chat-float-btn" class="fab" onclick="openRagFullscreen()" title="AI 智能问答">
+    <svg width="22" height="22"><use href="#ico-chat"/></svg>
+</button>
 
 <script src="script.js"></script>
+<script>
+// 3D Carousel
+let c3dIndex = 0;
+const C3D_TOTAL = 4;
+
+function updateCarousel() {
+    const items = document.querySelectorAll('.c3d-item');
+    const dots = document.querySelectorAll('.c3d-dot');
+    items.forEach((item, i) => {
+        item.className = 'c3d-item';
+        const diff = ((i - c3dIndex) % C3D_TOTAL + C3D_TOTAL) % C3D_TOTAL;
+        if (diff === 0) item.classList.add('center');
+        else if (diff === 1) item.classList.add('right');
+        else if (diff === C3D_TOTAL - 1) item.classList.add('left');
+        else item.classList.add('far');
+    });
+    dots.forEach((d, i) => d.classList.toggle('active', i === c3dIndex));
+}
+
+function carouselNext() { c3dIndex = (c3dIndex + 1) % C3D_TOTAL; updateCarousel(); }
+function carouselPrev() { c3dIndex = (c3dIndex - 1 + C3D_TOTAL) % C3D_TOTAL; updateCarousel(); }
+
+// KPI update helper (called from script.js after data loads)
+window.updateKPI = function(data) {
+    const prov = data['省份'] || [];
+    const nat = data['全国'] || [];
+    const city = data['地级市'] || [];
+    
+    const totalRec = prov.length + nat.length + city.length;
+    document.getElementById('kpi-records').textContent = totalRec.toLocaleString();
+    
+    const allYears = [...new Set([...prov, ...nat].map(r => r['年份']).filter(Boolean))].sort();
+    if (allYears.length >= 2) {
+        document.getElementById('kpi-years').textContent = allYears[0] + '–' + allYears[allYears.length - 1];
+    }
+    
+    const sample = prov[0] || nat[0] || {};
+    const metCount = Object.keys(sample).filter(k => k !== '年份' && k !== '地区' && typeof sample[k] === 'number').length;
+    document.getElementById('kpi-metrics').textContent = metCount;
+    
+    const regions = new Set([...prov.map(r => r['地区']), ...city.map(r => r['地区'])].filter(Boolean));
+    document.getElementById('kpi-regions').textContent = regions.size + '+';
+};
+
+window.addEventListener('DOMContentLoaded', () => {
+    // Build dots
+    const dotsEl = document.getElementById('carouselDots');
+    if (dotsEl) {
+        dotsEl.innerHTML = Array.from({length: C3D_TOTAL}, (_, i) =>
+            `<button class="c3d-dot${i===0?' active':''}" onclick="c3dIndex=${i};updateCarousel()"></button>`
+        ).join('');
+    }
+    updateCarousel();
+    setInterval(() => { if (document.getElementById('landing-page')?.style.display !== 'none') carouselNext(); }, 4000);
+    
+    // Touch swipe on carousel
+    const cw = document.getElementById('carousel3d');
+    if (cw) {
+        let tx = 0;
+        cw.addEventListener('touchstart', e => { tx = e.touches[0].clientX; }, {passive:true});
+        cw.addEventListener('touchend', e => {
+            const dx = e.changedTouches[0].clientX - tx;
+            if (Math.abs(dx) > 40) { dx < 0 ? carouselNext() : carouselPrev(); }
+        });
+    }
+
+    // DO NOT add click listeners to darkModeToggle or darkModeToggle2 here.
+    // Those are handled entirely by initDarkMode() in script.js.
+    
+    window.updateDarkIcons = function(dark) {
+        const icon1 = document.getElementById('dark-icon');
+        const lbl1 = document.getElementById('dark-label');
+        const icon2 = document.getElementById('dark-icon2');
+        const lbl2 = document.getElementById('dark-label2');
+        const href = dark ? '#ico-sun' : '#ico-moon';
+        const txt = dark ? '日间' : '夜间';
+        if (icon1) { const u = icon1.querySelector('use'); if(u) u.setAttribute('href', href); }
+        if (lbl1) lbl1.textContent = txt;
+        if (icon2) { const u = icon2.querySelector('use'); if(u) u.setAttribute('href', href); }
+        if (lbl2) lbl2.textContent = txt;
+    };
+    
+    // Sync icons to saved state (before script.js initDarkMode fires)
+    const savedDark = localStorage.getItem('darkMode') === 'true';
+    if (savedDark) {
+        document.body.classList.add('dark-mode');
+        window.updateDarkIcons(true);
+    }
+});
+</script>
 </body>
 </html>
