@@ -41,10 +41,12 @@ function debounce(fn, delay) {
 }
 
 function escapeHtml(str) {
-    return str.replace(/[&<>]/g, function(m) {
+    return String(str).replace(/[&<>"']/g, function(m) {
         if (m === '&') return '&amp;';
         if (m === '<') return '&lt;';
         if (m === '>') return '&gt;';
+        if (m === '"') return '&quot;';
+        if (m === "'") return '&#39;';
         return m;
     });
 }
@@ -56,21 +58,54 @@ function escapeRegex(str) {
 // ======================= Landing Page & RAG 全屏界面 =======================
 
 let threeScene = null;
+let ragReturnPage = 'dashboard';
+let pendingSheetSwitchTimer = null;
+
+function disposeLandingScene() {
+    if (!threeScene) return;
+    const currentScene = threeScene;
+    currentScene.disposed = true;
+    try {
+        if (currentScene.animationId) cancelAnimationFrame(currentScene.animationId);
+        if (currentScene.resizeHandler) window.removeEventListener('resize', currentScene.resizeHandler);
+        if (currentScene.mouseHandler) document.removeEventListener('mousemove', currentScene.mouseHandler);
+        if (currentScene.observer) currentScene.observer.disconnect();
+        (currentScene.disposables || []).forEach(item => {
+            try {
+                if (item.geometry) item.geometry.dispose();
+                if (item.material) item.material.dispose();
+                if (item.dispose) item.dispose();
+            } catch(e) {}
+        });
+        if (currentScene.renderer) {
+            currentScene.renderer.dispose();
+        }
+    } catch(e) {
+        console.warn('Landing scene dispose failed:', e);
+    }
+    if (threeScene === currentScene) threeScene = null;
+}
 
 function initLanding() {
     const canvas = document.getElementById('hero-canvas');
     if (!canvas || threeScene) return;
+    if (!window.THREE) {
+        canvas.style.display = 'none';
+        document.body.classList.add('three-unavailable');
+        console.warn('[Platform] ThreeJS 未加载，已启用 CSS 星空降级');
+        return;
+    }
     
     const scene = new THREE.Scene();
-    threeScene = scene;
-    
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    threeScene = { scene, camera, renderer, disposables: [], animationId: null, observer: null, resizeHandler: null, mouseHandler: null, disposed: false };
+    const sceneState = threeScene;
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     
     // ---- 多层粒子系统 ----
-    const particlesCount = 2200;
+    const particlesCount = 900;
     const posArray = new Float32Array(particlesCount * 3);
     const colorArray = new Float32Array(particlesCount * 3);
     const speedArray = new Float32Array(particlesCount); // individual drift speeds
@@ -114,6 +149,7 @@ function initLanding() {
     
     const particlesMesh = new THREE.Points(particlesGeometry, particlesMaterial);
     scene.add(particlesMesh);
+    threeScene.disposables.push(particlesMesh);
     
     // ---- Connection lines system (LineSegments) ----
     const MAX_LINES = 800;
@@ -131,6 +167,7 @@ function initLanding() {
     });
     const linesMesh = new THREE.LineSegments(lineGeo, lineMat);
     scene.add(linesMesh);
+    threeScene.disposables.push(linesMesh);
     
     // ---- Floating rings (orbit decorators) ----
     function makeRing(radius, color, tilt) {
@@ -144,6 +181,7 @@ function initLanding() {
         const ring = new THREE.Line(geo, mat);
         ring.rotation.x = tilt;
         scene.add(ring);
+        threeScene.disposables.push(ring);
         return ring;
     }
     const rings = [
@@ -156,10 +194,12 @@ function initLanding() {
     
     let mouseX = 0, mouseY = 0;
     let targetMouseX = 0, targetMouseY = 0;
-    document.addEventListener('mousemove', (e) => {
+    const mouseHandler = (e) => {
         targetMouseX = (e.clientX / window.innerWidth - 0.5) * 2;
         targetMouseY = (e.clientY / window.innerHeight - 0.5) * 2;
-    });
+    };
+    document.addEventListener('mousemove', mouseHandler);
+    threeScene.mouseHandler = mouseHandler;
     
     let clock = new THREE.Clock();
     let animationId = null;
@@ -201,7 +241,9 @@ function initLanding() {
     let lineTimer = 0;
     
     function animate() {
+        if (!threeScene || threeScene !== sceneState || sceneState.disposed) return;
         animationId = requestAnimationFrame(animate);
+        sceneState.animationId = animationId;
         const elapsed = clock.getElapsedTime();
         const delta = clock.getDelta ? 0.016 : 0.016;
         
@@ -242,25 +284,29 @@ function initLanding() {
             linesMesh.rotation.copy(particlesMesh.rotation);
         }
         
-        renderer.render(scene, camera);
+        if (!sceneState.disposed && threeScene === sceneState) {
+            renderer.render(scene, camera);
+        }
     }
     animate();
     
-    window.addEventListener('resize', () => {
+    const resizeHandler = () => {
         if (document.getElementById('landing-page')?.style.display === 'none') return;
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
-    });
+    };
+    window.addEventListener('resize', resizeHandler);
+    threeScene.resizeHandler = resizeHandler;
     
     const observer = new MutationObserver(() => {
         const landing = document.getElementById('landing-page');
         if (landing && landing.style.display === 'none' && animationId) {
-            cancelAnimationFrame(animationId);
-            animationId = null;
+            disposeLandingScene();
         }
     });
     observer.observe(document.body, { attributes: true, subtree: true });
+    if (threeScene) threeScene.observer = observer;
 }
 
 function showLanding() {
@@ -268,11 +314,12 @@ function showLanding() {
     const dp = document.getElementById('dashboard-page');
     const rag = document.getElementById('rag-fullscreen');
     const fab = document.getElementById('chat-float-btn');
+    document.body.classList.remove('rag-open');
     
     if (dp) { dp.style.opacity = '0'; dp.style.transform = 'translateY(12px)'; }
     
     setTimeout(() => {
-        if (lp) { lp.style.display = 'block'; lp.style.opacity = '0'; requestAnimationFrame(() => { lp.style.transition = 'opacity 0.35s ease'; lp.style.opacity = '1'; }); }
+        if (lp) { lp.style.display = 'block'; lp.style.opacity = '0'; lp.style.transform = 'scale(1)'; requestAnimationFrame(() => { lp.style.transition = 'opacity 0.35s ease'; lp.style.opacity = '1'; }); }
         if (dp) dp.style.display = 'none';
         if (rag) rag.style.display = 'none';
         if (fab) fab.style.display = 'none';
@@ -290,6 +337,24 @@ function enterDashboard(tab) {
     const lp = document.getElementById('landing-page');
     const dp = document.getElementById('dashboard-page');
     const fab = document.getElementById('chat-float-btn');
+
+    if (tab === 'rag') {
+        const fromDashboard = dp && dp.style.display !== 'none';
+        ragReturnPage = fromDashboard ? 'dashboard' : 'landing';
+        if (lp) {
+            lp.style.transition = 'opacity 0.22s ease, transform 0.22s ease';
+            lp.style.opacity = '0';
+            lp.style.transform = 'scale(0.99)';
+        }
+        setTimeout(() => {
+            if (lp) lp.style.display = 'none';
+            if (dp && !fromDashboard) dp.style.display = 'none';
+            if (fab) fab.style.display = 'none';
+            if (!fromDashboard) disposeLandingScene();
+            openRagFullscreen({ returnPage: ragReturnPage });
+        }, 180);
+        return;
+    }
     
     if (lp) {
         lp.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
@@ -298,7 +363,10 @@ function enterDashboard(tab) {
     }
     
     setTimeout(() => {
-        if (lp) lp.style.display = 'none';
+        if (lp) {
+            lp.style.display = 'none';
+            disposeLandingScene();
+        }
         if (dp) {
             dp.style.display = 'block';
             dp.style.opacity = '0';
@@ -315,9 +383,7 @@ function enterDashboard(tab) {
         }
         
         // Route to specific section based on tab
-        if (tab === 'rag') {
-            setTimeout(openRagFullscreen, 300);
-        } else if (tab === 'pie') {
+        if (tab === 'pie') {
             // Make sure pie card is visible and scroll to it
             setTimeout(() => {
                 const pie = document.getElementById('section-pie');
@@ -346,14 +412,55 @@ function setLandingQuery(q) {
     if (input) input.value = q;
 }
 
+function initHeroPreview() {
+    const card = document.querySelector('.hero-preview-card');
+    if (!card || card._bound) return;
+    card._bound = true;
+
+    const tabs = [...card.querySelectorAll('.preview-tab')];
+    const panels = [...card.querySelectorAll('.preview-panel')];
+    const activate = (name) => {
+        tabs.forEach(tab => tab.classList.toggle('active', tab.dataset.preview === name));
+        panels.forEach(panel => panel.classList.toggle('active', panel.dataset.previewPanel === name));
+    };
+
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => activate(tab.dataset.preview));
+    });
+
+    card.querySelectorAll('.preview-action').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const query = btn.dataset.query || '';
+            if (query) setLandingQuery(query);
+            enterDashboardWithQuery();
+        });
+    });
+}
+
 // ======================= RAG 全屏界面 =======================
 
-function openRagFullscreen() {
+function openRagFullscreen(options = {}) {
     const rag = document.getElementById('rag-fullscreen');
     if (!rag) return;
+
+    const lp = document.getElementById('landing-page');
+    const dp = document.getElementById('dashboard-page');
+    const dashboardVisible = dp && getComputedStyle(dp).display !== 'none';
+    const landingVisible = lp && getComputedStyle(lp).display !== 'none';
+    ragReturnPage = options.returnPage || (dashboardVisible ? 'dashboard' : landingVisible ? 'landing' : 'dashboard');
     
+    if (ragReturnPage === 'landing') {
+        if (lp) lp.style.display = 'none';
+        if (dp) dp.style.display = 'none';
+    } else {
+        if (lp) lp.style.display = 'none';
+        if (dp) dp.style.display = 'block';
+        disposeLandingScene();
+    }
     rag.style.display = 'flex';
-    document.getElementById('chat-float-btn').style.display = 'none';
+    document.body.classList.add('rag-open');
+    const fab = document.getElementById('chat-float-btn');
+    if (fab) fab.style.display = 'none';
     
     // Init session if needed
     if (!currentSessionId) {
@@ -383,7 +490,21 @@ function openRagFullscreen() {
 function closeRagFullscreen() {
     const rag = document.getElementById('rag-fullscreen');
     if (rag) rag.style.display = 'none';
-    document.getElementById('chat-float-btn').style.display = 'flex';
+    document.body.classList.remove('rag-open');
+    if (ragReturnPage === 'landing') {
+        showLanding();
+        return;
+    }
+    const lp = document.getElementById('landing-page');
+    const dp = document.getElementById('dashboard-page');
+    if (lp) lp.style.display = 'none';
+    if (dp) {
+        dp.style.display = 'block';
+        dp.style.opacity = '1';
+        dp.style.transform = 'translateY(0)';
+    }
+    const fab = document.getElementById('chat-float-btn');
+    if (fab) fab.style.display = 'flex';
 }
 
 function sendRagQuick(question) {
@@ -421,6 +542,8 @@ function switchSession(id) {
     currentSessionId = id;
     const session = getCurrentSession();
     if (!session) return;
+    const titleEl = document.getElementById('rag-session-title');
+    if (titleEl) titleEl.textContent = session.title || 'AI 分析助手';
     
     // Render messages
     const container = document.getElementById('rag-messages');
@@ -449,9 +572,20 @@ function switchSession(id) {
     renderSessionList();
 }
 
+function syncSessionSelect() {
+    const sel = document.getElementById('rag-session-select');
+    if (!sel) return;
+    sel.innerHTML = sessions.map(s => {
+        const title = s.title || '新对话';
+        return `<option value="${escapeHtml(s.id)}"${s.id === currentSessionId ? ' selected' : ''}>${escapeHtml(title)}</option>`;
+    }).join('');
+    sel.disabled = !sessions.length;
+}
+
 function renderSessionList() {
     const list = document.getElementById('rag-session-list');
     if (!list) return;
+    syncSessionSelect();
     
     if (!sessions.length) {
         list.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;padding:8px 0;">暂无对话</div>';
@@ -473,6 +607,13 @@ function renderSessionList() {
 
 // Session event delegation
 document.addEventListener('click', function(e) {
+    const suggestion = e.target.closest('.rag-suggestion');
+    if (suggestion) {
+        const q = suggestion.textContent.trim();
+        if (q) sendRagQuick(q);
+        return;
+    }
+
     const item = e.target.closest('.session-item[data-session-id]');
     const del = e.target.closest('.session-delete[data-delete-id]');
     
@@ -499,6 +640,17 @@ document.addEventListener('click', function(e) {
 function startNewSession() {
     const session = createSession('新对话');
     switchSession(session.id);
+}
+
+function deleteCurrentSession() {
+    if (!currentSessionId) return;
+    sessions = sessions.filter(s => s.id !== currentSessionId);
+    saveSessions();
+    if (sessions.length) switchSession(sessions[0].id);
+    else {
+        currentSessionId = null;
+        startNewSession();
+    }
 }
 
 // Compat: legacy ragHistory alias
@@ -531,10 +683,15 @@ async function sendRagMessage() {
         const response = await fetch('/api/agent', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question })
+            body: JSON.stringify({
+                question,
+                sessionId: currentSessionId || 'default',
+                history: (getCurrentSession()?.messages || []).slice(-8).map(m => ({ role: m.role, content: m.content }))
+            })
         });
         
         const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '请求失败');
         
         if (hint) {
             const citationCount = data.citations?.length || 0;
@@ -553,6 +710,41 @@ async function sendRagMessage() {
                 ${data.reasoning.slice(0, 4).map(r => `<div style="margin-bottom:4px;">· ${escapeHtml(String(r))}</div>`).join('')}
             </div>`;
         }
+
+        if (Array.isArray(data.toolTrace) && data.toolTrace.length > 0) {
+            const toolLabels = {
+                trend: '趋势分析',
+                compare: '地区对比',
+                forecast: '预测推断',
+                rank: '排名计算',
+                point: '定点查询',
+                query_trend: '趋势分析',
+                compare_regions: '地区对比',
+                predict_future: '预测推断',
+                rank_provinces: '排名计算',
+                query_point: '定点查询'
+            };
+            html += `<div class="rag-method-card">
+                <div class="rag-method-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><use href="#ico-data"/></svg>
+                    方法轨迹
+                </div>
+                ${data.toolTrace.slice(0, 3).map(trace => {
+                    const toolName = trace.normalizedTool || trace.tool || trace.type || 'analysis';
+                    const label = toolLabels[toolName] || toolName;
+                    const params = trace.params || {};
+                    const paramText = Object.entries(params)
+                        .filter(([, value]) => value !== undefined && value !== null && value !== '')
+                        .slice(0, 5)
+                        .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join('、') : value}`)
+                        .join(' · ');
+                    return `<div class="rag-method-item">
+                        <span>${escapeHtml(label)}</span>
+                        <small>${escapeHtml(paramText || '基于当前问题自动选择')}</small>
+                    </div>`;
+                }).join('')}
+            </div>`;
+        }
         
         // 主回答
         html += `<div class="rag-answer-content">${formatAnswer(data.answer || '无回答')}</div>`;
@@ -563,6 +755,9 @@ async function sendRagMessage() {
                 <div style="font-size:.73rem;color:var(--c-muted);margin-bottom:6px;display:flex;align-items:center;gap:5px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-src"/></svg>数据来源：</div>
                 ${data.citations.map(c => `<span class="rag-citation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><use href="#ico-src"/></svg>${escapeHtml(c)}</span>`).join('')}
             </div>`;
+        }
+        if (data.suggestions && data.suggestions.length) {
+            html += `<div class="rag-suggestions">${data.suggestions.map(s => `<button class="rag-suggestion" type="button" data-question="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join('')}</div>`;
         }
         
         assistantBubble.innerHTML = html;
@@ -579,11 +774,14 @@ async function sendRagMessage() {
             // Auto-title from first message
             if (session.messages.length === 0) {
                 session.title = question.slice(0, 30);
+                const titleEl = document.getElementById('rag-session-title');
+                if (titleEl) titleEl.textContent = session.title;
             }
             session.messages.push({ role: 'user', content: question });
             session.messages.push({ role: 'assistant', content: data.answer || '', html: html });
             saveSessions();
             renderSessionList();
+            syncSessionSelect();
         }
         
     } catch (err) {
@@ -712,6 +910,55 @@ function addMessage(role, content, isStreaming = false) {
 // Chart instance registry: chartId → echarts instance
 const _inlineChartInstances = {};
 
+function disposeChartInstance(chart) {
+    if (!chart) return null;
+    try {
+        if (chart._ro) chart._ro.disconnect();
+        if (chart._resizeFn) window.removeEventListener('resize', chart._resizeFn);
+        if (!chart.isDisposed?.()) chart.dispose();
+    } catch(e) {}
+    return null;
+}
+
+function initEChartSafe(dom, opts = {}) {
+    if (!dom || !window.echarts) return null;
+    const old = echarts.getInstanceByDom(dom);
+    if (old) disposeChartInstance(old);
+    return echarts.init(dom, null, opts);
+}
+
+function showChartUnavailable(dom, title = '图表库未加载') {
+    if (!dom) return;
+    dom.innerHTML = `
+        <div class="chart-fallback">
+            <div class="chart-fallback-title">${escapeHtml(title)}</div>
+            <div class="chart-fallback-text">当前浏览器未能加载 ECharts。数据表和智能问答仍可使用；恢复网络或改用本地静态库后图表会自动恢复。</div>
+        </div>
+    `;
+}
+
+function resizeVisibleChart(chart, opts) {
+    try {
+        if (!chart || chart.isDisposed?.()) return;
+        const dom = chart.getDom?.();
+        if (dom && dom.offsetParent === null) return;
+        chart.resize(opts);
+    } catch(e) {}
+}
+
+function disposeAllCharts() {
+    mainChart = disposeChartInstance(mainChart);
+    pieChart = disposeChartInstance(pieChart);
+    advancedChart = disposeChartInstance(advancedChart);
+    rankChart = disposeChartInstance(rankChart);
+    currentChartInstance = disposeChartInstance(currentChartInstance);
+    _chartModalInstance = disposeChartInstance(_chartModalInstance);
+    Object.keys(_inlineChartInstances).forEach(id => {
+        _inlineChartInstances[id] = disposeChartInstance(_inlineChartInstances[id]);
+        delete _inlineChartInstances[id];
+    });
+}
+
 /* ─── Chart Modal System ──────────────────────────────── */
 
 let _chartModalInstance = null;  // active ECharts instance in modal
@@ -745,16 +992,20 @@ function _getOrCreateModal() {
     // Close handlers
     overlay.addEventListener('click', e => { if (e.target === overlay) closeChartModal(); });
     document.getElementById('chart-modal-close').addEventListener('click', closeChartModal);
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeChartModal(); });
+    if (!document._chartModalEscBound) {
+        document._chartModalEscBound = true;
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') closeChartModal(); });
+    }
 
     // Export handlers
     const exportChart = (type) => {
         if (!_chartModalInstance) return;
-        const url = _chartModalInstance.getDataURL({ type: type === 'svg' ? 'svg' : 'png', pixelRatio: 2, backgroundColor: getComputedStyle(document.body).getPropertyValue('--c-card').trim() || '#ffffff' });
+        const echartsType = type === 'jpg' ? 'jpeg' : type;
+        const url = _chartModalInstance.getDataURL({ type: echartsType, pixelRatio: 2, backgroundColor: getComputedStyle(document.body).getPropertyValue('--c-card').trim() || '#ffffff' });
         const a = document.createElement('a'); a.href = url; a.download = 'chart.' + type; a.click();
     };
     document.getElementById('cme-png').onclick = () => exportChart('png');
-    document.getElementById('cme-jpg').onclick = () => exportChart('jpeg');
+    document.getElementById('cme-jpg').onclick = () => exportChart('jpg');
     document.getElementById('cme-svg').onclick = () => exportChart('svg');
 }
 
@@ -773,20 +1024,19 @@ function openChartModal(config) {
     const years   = config.years ? config.years[0] + '–' + config.years[config.years.length-1] : '';
     meta.textContent = `${config.metric}  ·  ${regions}${years ? '  ·  ' + years : ''}`;
 
-    // Destroy old instance
-    if (_chartModalInstance) { _chartModalInstance.dispose(); _chartModalInstance = null; }
+    _chartModalInstance = disposeChartInstance(_chartModalInstance);
 
     // Chart div reset
+    chartEl.id = 'chart-modal-chart';
+    chartEl.innerHTML = '';
     chartEl.style.height = '500px';
+    chartEl.style.width = '100%';
 
     // Render after layout
     requestAnimationFrame(() => requestAnimationFrame(() => {
         setTimeout(() => {
-            const chartId = 'modal-chart-' + Date.now();
-            chartEl.id = chartId;
-            _doRenderInlineChart(chartId, config, /* isModal= */ true);
-            // Store instance reference
-            setTimeout(() => { _chartModalInstance = echarts.getInstanceByDom(chartEl); }, 150);
+            _doRenderInlineChart('chart-modal-chart', config, true);
+            _chartModalInstance = window.echarts ? echarts.getInstanceByDom(chartEl) : null;
         }, 30);
     }));
 }
@@ -798,7 +1048,7 @@ function closeChartModal() {
     setTimeout(() => {
         overlay.style.display = 'none';
         overlay.classList.remove('closing');
-        if (_chartModalInstance) { _chartModalInstance.dispose(); _chartModalInstance = null; }
+        _chartModalInstance = disposeChartInstance(_chartModalInstance);
     }, 200);
 }
 
@@ -840,35 +1090,40 @@ function renderAgentChart(config, targetBubble) {
 function _doRenderInlineChart(chartId, config, isModal) {
     const chartDom = document.getElementById(chartId);
     if (!chartDom) return;
+    if (!window.echarts) {
+        showChartUnavailable(chartDom, '聊天图表暂不可用');
+        return;
+    }
     // In modal: bigger chart, richer grid padding
     if (isModal) {
         chartDom.style.height = '500px';
     }
     // Dispose previous if any
     if (_inlineChartInstances[chartId]) {
-        try { 
-            if (_inlineChartInstances[chartId]._ro) _inlineChartInstances[chartId]._ro.disconnect();
-            _inlineChartInstances[chartId].dispose(); 
-        } catch(e) {}
+        _inlineChartInstances[chartId] = disposeChartInstance(_inlineChartInstances[chartId]);
         delete _inlineChartInstances[chartId];
     }
     
     // CRITICAL: never set inline width - that causes bubble to stretch to full page width.
     // CSS width:100% on .rag-inline-chart handles width correctly.
     // Only ensure height is explicit.
-    chartDom.style.height = '280px';
+    chartDom.style.height = isModal ? '500px' : '280px';
     
     // Read the actual rendered width from the wrap container (not chartDiv itself)
-    const wrapEl = chartDom.closest('.rag-inline-chart-wrap');
+    const wrapEl = isModal ? chartDom.parentElement : chartDom.closest('.rag-inline-chart-wrap');
     const measuredW = wrapEl ? wrapEl.clientWidth : (chartDom.clientWidth || 480);
-    const measuredH = 280;
+    const measuredH = isModal ? 500 : 280;
     
     // Init echarts - pass explicit height, let width be measured
-    const chart = echarts.init(chartDom, null, { 
+    const chart = initEChartSafe(chartDom, { 
         width: measuredW > 20 ? measuredW : 480, 
         height: measuredH,
         renderer: 'canvas' 
     });
+    if (!chart) {
+        showChartUnavailable(chartDom, '聊天图表暂不可用');
+        return;
+    }
     _inlineChartInstances[chartId] = chart;
     
     // ResizeObserver on the WRAP container (stable width reference)
@@ -1030,7 +1285,7 @@ async function sendMessage() {
         const response = await fetch('/api/agent', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question }),
+            body: JSON.stringify({ question, sessionId: currentSessionId || 'legacy_chat' }),
             signal
         });
 
@@ -1116,7 +1371,8 @@ async function clearConversation() {
     try {
         const response = await fetch('/api/clear_history', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId: currentSessionId || 'legacy_chat' })
         });
         if (response.ok) {
             if (chatMessages) chatMessages.innerHTML = '';
@@ -1255,46 +1511,66 @@ let regionSearchKeyword = "";
 // ======================= 初始化 =======================
 
 async function init() {
+    if (window._platformInitStarted) return;
+    window._platformInitStarted = true;
     await loadAllData();
     
-    mainChart = echarts.init(document.getElementById("main-chart"));
-    mainChart.getDom().addEventListener('mouseenter', () => { isCarouselPaused = true; });
-    mainChart.getDom().addEventListener('mouseleave', () => { isCarouselPaused = false; });
+    mainChart = initEChartSafe(document.getElementById("main-chart"));
+    if (mainChart) {
+        mainChart.getDom().addEventListener('mouseenter', () => { isCarouselPaused = true; });
+        mainChart.getDom().addEventListener('mouseleave', () => { isCarouselPaused = false; });
+    } else {
+        showChartUnavailable(document.getElementById("main-chart"));
+    }
     
-    pieChart = echarts.init(document.getElementById("pie-chart"));
+    pieChart = initEChartSafe(document.getElementById("pie-chart"));
     if (pieChart) {
         pieChart.getDom().addEventListener('mouseenter', () => { piePaused = true; });
         pieChart.getDom().addEventListener('mouseleave', () => { piePaused = false; });
+    } else {
+        showChartUnavailable(document.getElementById("pie-chart"));
     }
     
-    advancedChart = echarts.init(document.getElementById("advanced-content"));
+    advancedChart = initEChartSafe(document.getElementById("advanced-content"));
     if (advancedChart) {
         advancedChart.getDom().addEventListener('mouseenter', () => { advPaused = true; });
         advancedChart.getDom().addEventListener('mouseleave', () => { advPaused = false; });
+    } else {
+        showChartUnavailable(document.getElementById("advanced-content"));
     }
     
+    if (!window._platformResizeBound) {
+    window._platformResizeBound = true;
+    let resizeRaf = null;
     window.addEventListener("resize", () => {
-        mainChart?.resize();
-        pieChart?.resize();
-        advancedChart?.resize();
-        rankChart?.resize();
+        if (resizeRaf) cancelAnimationFrame(resizeRaf);
+        resizeRaf = requestAnimationFrame(() => {
+        resizeVisibleChart(mainChart);
+        resizeVisibleChart(pieChart);
+        resizeVisibleChart(advancedChart);
+        resizeVisibleChart(rankChart);
         // Also resize any inline chat charts
-        Object.values(_inlineChartInstances || {}).forEach(c => {
+        Object.entries(_inlineChartInstances || {}).forEach(([id, c]) => {
             try {
                 if (!c || c.isDisposed()) return;
                 const dom = c.getDom();
-                const wrap = dom?.closest('.rag-inline-chart-wrap');
+                const isModalChart = id === 'chart-modal-chart';
+                const wrap = isModalChart ? dom?.parentElement : dom?.closest('.rag-inline-chart-wrap');
                 const newW = wrap ? wrap.clientWidth : 0;
-                if (newW > 20) c.resize({ width: newW, height: 280 });
+                if (newW > 20) c.resize({ width: newW, height: isModalChart ? 500 : 280 });
                 else c.resize();
             } catch(e) {}
         });
+        });
     });
+    }
     
     buildSheetSelect();
     bindEvents();
     initColumnSelector();
     switchSheet(currentSheet);
+    initPageEnhancements();
+    initHeroPreview();
     
     // 绑定RAG事件
     bindRagEvents();
@@ -1307,6 +1583,7 @@ async function init() {
 
 function initDarkMode() {
     const darkModeToggle = document.getElementById('darkModeToggle');
+    const landingToggle = document.getElementById('darkModeToggleLanding');
     const isDarkMode = localStorage.getItem('darkMode') === 'true';
     
     const applyDark = (dark) => {
@@ -1316,6 +1593,15 @@ function initDarkMode() {
     };
     
     if (isDarkMode) applyDark(true);
+
+    if (landingToggle && !landingToggle._dmBound) {
+        landingToggle._dmBound = true;
+        landingToggle.addEventListener('click', () => {
+            const isNowDark = !document.body.classList.contains('dark-mode');
+            localStorage.setItem('darkMode', isNowDark);
+            applyDark(isNowDark);
+        });
+    }
     
     // Dashboard header toggle
     if (darkModeToggle && !darkModeToggle._dmBound) {
@@ -1365,8 +1651,13 @@ function updateChartsTheme(isDark) {
 // ======================= RAG 事件绑定 =======================
 
 function bindRagEvents() {
+    if (bindRagEvents._bound) return;
+    bindRagEvents._bound = true;
     const ragInput = document.getElementById('rag-input');
     const ragSend = document.getElementById('rag-send');
+    const sessionSelect = document.getElementById('rag-session-select');
+    const newTop = document.getElementById('rag-new-top');
+    const delTop = document.getElementById('rag-delete-top');
     
     if (ragInput) {
         ragInput.addEventListener('input', function() {
@@ -1389,6 +1680,14 @@ function bindRagEvents() {
             if (!isRagStreaming) sendRagMessage();
         });
     }
+
+    if (sessionSelect) {
+        sessionSelect.addEventListener('change', e => {
+            if (e.target.value) switchSession(e.target.value);
+        });
+    }
+    if (newTop) newTop.addEventListener('click', startNewSession);
+    if (delTop) delTop.addEventListener('click', deleteCurrentSession);
     
     // 旧版聊天事件（兼容）
     if (chatSend) chatSend.addEventListener('click', sendMessage);
@@ -1417,6 +1716,8 @@ function bindRagEvents() {
 // ======================= 列选择器 =======================
 
 function initColumnSelector() {
+    if (initColumnSelector._bound) return;
+    initColumnSelector._bound = true;
     const toggleBtn = document.getElementById("toggle-column-panel");
     const panel = document.getElementById("column-panel");
     if (!toggleBtn || !panel) return;
@@ -1488,21 +1789,66 @@ function refreshColumnCheckboxList() {
 // ======================= 工作表切换 =======================
 
 function buildSheetSelect() {
-    const sel = document.getElementById("sheet-list");
-    if (!sel) return;
-    sel.innerHTML = "";
-    window.sheetList?.forEach(s => {
-        const opt = document.createElement("option");
-        opt.value = s;
-        opt.textContent = s;
-        if (s === currentSheet) opt.selected = true;
-        sel.appendChild(opt);
+    const selects = [document.getElementById("sheet-list"), document.getElementById("sheet-list-table")].filter(Boolean);
+    if (!selects.length) return;
+    selects.forEach(sel => {
+        sel.innerHTML = "";
+        window.sheetList?.forEach(s => {
+            const opt = document.createElement("option");
+            opt.value = s;
+            opt.textContent = s;
+            if (s === currentSheet) opt.selected = true;
+            sel.appendChild(opt);
+        });
+        sel.onchange = (e) => requestSwitchSheet(e.target.value);
     });
-    sel.onchange = (e) => switchSheet(e.target.value);
+}
+
+function initPageEnhancements() {
+    if (initPageEnhancements._bound) return;
+    initPageEnhancements._bound = true;
+    const nav = document.querySelector('.landing-nav');
+    const onScroll = () => nav?.classList.toggle('scrolled', window.scrollY > 24);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+
+    const targets = document.querySelectorAll('.kpi-card,.dash-card,.cap-card,.c3d-item,.analysis-card-entry');
+    targets.forEach(el => el.classList.add('reveal-on-scroll'));
+    if ('IntersectionObserver' in window) {
+        const io = new IntersectionObserver(entries => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('in-view');
+                    io.unobserve(entry.target);
+                }
+            });
+        }, { threshold: 0.12 });
+        targets.forEach(el => io.observe(el));
+    } else {
+        targets.forEach(el => el.classList.add('in-view'));
+    }
+}
+
+function syncSheetSelects(sheetName = currentSheet) {
+    [document.getElementById("sheet-list"), document.getElementById("sheet-list-table")]
+        .filter(Boolean)
+        .forEach(sel => { sel.value = sheetName; });
+}
+
+function requestSwitchSheet(sheetName) {
+    syncSheetSelects(sheetName);
+    document.body.classList.add('sheet-switching');
+    if (pendingSheetSwitchTimer) clearTimeout(pendingSheetSwitchTimer);
+    pendingSheetSwitchTimer = setTimeout(() => {
+        pendingSheetSwitchTimer = null;
+        switchSheet(sheetName);
+        requestAnimationFrame(() => document.body.classList.remove('sheet-switching'));
+    }, 24);
 }
 
 function switchSheet(sheetName) {
     currentSheet = sheetName;
+    syncSheetSelects();
     originalRows = window.workbook[sheetName]?.map(row => ({ ...row })) || [];
     headers = Object.keys(originalRows[0] || {});
     
@@ -1565,6 +1911,9 @@ function switchSheet(sheetName) {
 
     sortKey = "";
     sortType = "asc";
+    const tableSearch = document.getElementById("search-input");
+    if (tableSearch) tableSearch.value = "";
+    regionSearchKeyword = "";
     const sortStatus = document.getElementById("sort-status");
     if (sortStatus) sortStatus.innerHTML = "排序：无（点击表头排序）";
     
@@ -2054,6 +2403,10 @@ function stopPieCarousel() {
 }
 
 function renderPieChart() {
+    if (!pieChart || !window.echarts) {
+        showChartUnavailable(document.getElementById("pie-chart"));
+        return;
+    }
     const metric = pieAvailableMetrics[pieCurrentMetricIndex];
     const year = pieCurrentYear;
     const provinceRows = window.workbook["省份"]?.filter(r => r["年份"] === year) || [];
@@ -2437,8 +2790,8 @@ function renderRankCompareChart(metric, year) {
     
     const chartPanel = document.getElementById("rank-chart-panel");
     if (chartPanel) {
-        if (rankChart) rankChart.dispose();
-        rankChart = echarts.init(chartPanel);
+        rankChart = disposeChartInstance(rankChart);
+        rankChart = initEChartSafe(chartPanel);
         updateRankChart();
     }
 }
@@ -2740,6 +3093,27 @@ function goToPage() {
 }
 
 function exportData(type) {
+    if (!window.XLSX) {
+        if (type === "csv") {
+            const rows = filteredRowsForPage || [];
+            if (!rows.length) { alert("当前没有可导出的数据"); return; }
+            const headers = Object.keys(rows[0]);
+            const escapeCsv = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+            const csv = [
+                headers.map(escapeCsv).join(","),
+                ...rows.map(row => headers.map(h => escapeCsv(row[h])).join(","))
+            ].join("\n");
+            const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.download = `${currentSheet}_data.csv`;
+            link.click();
+            URL.revokeObjectURL(link.href);
+            return;
+        }
+        alert("Excel 导出库未加载。请恢复网络后刷新，或先使用 CSV 导出。");
+        return;
+    }
     const ws = XLSX.utils.json_to_sheet(filteredRowsForPage);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, currentSheet);
@@ -2837,15 +3211,15 @@ function renderControls(type) {
             <select id="scatter-regions" multiple size="4" style="min-width: 180px;">
                 ${regions.map(r => `<option value="${r}" ${defaultRegions.includes(r) ? 'selected' : ''}>${r}</option>`).join('')}
             </select>
-            <button type="button" class="btn-xs" id="scatter-select-all">全选</button>
-            <button type="button" class="btn-xs" id="scatter-clear-all">清空</button>
-            <span style="font-size: 11px; color: var(--text-muted); margin-left: 8px;">💡 按住 Ctrl 可多选</span>
+            <button type="button" class="analysis-mini-action" id="scatter-select-all">全选</button>
+            <button type="button" class="analysis-mini-action ghost" id="scatter-clear-all">清空</button>
+            <span class="analysis-help-text">按住 Ctrl 可多选</span>
         `;
         container.appendChild(regionDiv);
         
         const btn = document.createElement('button');
         btn.innerText = '生成散点图';
-        btn.className = 'btn-sm';
+        btn.className = 'analysis-run-btn';
         btn.onclick = () => loadChart(type);
         container.appendChild(btn);
         
@@ -2862,7 +3236,7 @@ function renderControls(type) {
 async function loadChart(type) {
     const chartDom = document.getElementById('analysis-chart');
     if (!chartDom) return;
-    if (currentChartInstance) currentChartInstance.dispose();
+    currentChartInstance = disposeChartInstance(currentChartInstance);
     
     if (type === 'scatter') {
         const year = parseInt(document.getElementById('scatter-year')?.value) || 2023;
@@ -2927,7 +3301,7 @@ async function loadChart(type) {
                 }]
             };
             
-            currentChartInstance = echarts.init(chartDom);
+            currentChartInstance = initEChartSafe(chartDom);
             currentChartInstance.setOption(option);
             setTimeout(() => currentChartInstance.resize(), 100);
         } catch (e) {
@@ -2936,18 +3310,39 @@ async function loadChart(type) {
     }
 }
 
+function updateAnalysisPanelUI(type, isOpen) {
+    document.querySelectorAll('.analysis-card-entry').forEach(card => {
+        const active = isOpen && card.dataset.chart === type;
+        card.classList.toggle('active', active);
+        const btn = card.querySelector('.analysis-toggle-btn');
+        if (btn) {
+            btn.setAttribute('aria-expanded', active ? 'true' : 'false');
+            const label = btn.querySelector('span') || btn;
+            label.textContent = active ? '收起分析' : '展开分析';
+        }
+    });
+}
+
+function closeAnalysisPanel() {
+    const panel = document.getElementById('analysis-panel');
+    if (!panel) return;
+    panel.style.maxHeight = '0';
+    panel.classList.remove('open');
+    setTimeout(() => {
+        if (!panel.classList.contains('open')) panel.style.display = 'none';
+    }, 240);
+    updateAnalysisPanelUI(activeChart, false);
+    activeChart = null;
+    currentChartInstance = disposeChartInstance(currentChartInstance);
+}
+
 function openAnalysisPanel(type) {
     const panel = document.getElementById('analysis-panel');
     if (!panel) return;
     
     // Toggle: if same chart already open, close it
     if (activeChart === type && panel.style.display !== 'none') {
-        panel.style.display = 'none';
-        panel.style.maxHeight = '0';
-        activeChart = null;
-        if (currentChartInstance) { currentChartInstance.dispose(); currentChartInstance = null; }
-        // Reset card active states
-        document.querySelectorAll('.card-item').forEach(c => c.classList.remove('active'));
+        closeAnalysisPanel();
         return;
     }
     
@@ -2962,13 +3357,12 @@ function openAnalysisPanel(type) {
     panel.style.overflow = 'hidden';
     panel.style.transition = 'max-height 0.4s cubic-bezier(0.4,0,0.2,1)';
     requestAnimationFrame(() => {
+        panel.classList.add('open');
         panel.style.maxHeight = '800px';
     });
     
     // Highlight active card
-    document.querySelectorAll('.card-item').forEach(c => {
-        c.classList.toggle('active', c.dataset.chart === type);
-    });
+    updateAnalysisPanelUI(type, true);
     
     renderControls(type);
     
@@ -2980,6 +3374,10 @@ function openAnalysisPanel(type) {
 }
 
 function exportAnalysisChart(format) {
+    if (!window.echarts) {
+        alert("图表库未加载，暂时无法导出图表。");
+        return;
+    }
     const chartDom = document.getElementById('analysis-chart');
     if (!chartDom) return;
     const chart = echarts.getInstanceByDom(chartDom);
@@ -3003,25 +3401,39 @@ function exportAnalysisChart(format) {
 }
 
 function bindExportEvents() {
-    document.getElementById('export-chart-png')?.addEventListener('click', () => exportAnalysisChart('png'));
-    document.getElementById('export-chart-jpg')?.addEventListener('click', () => exportAnalysisChart('jpg'));
-    document.getElementById('export-chart-svg')?.addEventListener('click', () => exportAnalysisChart('svg'));
+    const bind = (id, fn) => {
+        const el = document.getElementById(id);
+        if (!el || el._exportBound) return;
+        el._exportBound = true;
+        el.addEventListener('click', fn);
+    };
+    bind('export-chart-png', () => exportAnalysisChart('png'));
+    bind('export-chart-jpg', () => exportAnalysisChart('jpg'));
+    bind('export-chart-svg', () => exportAnalysisChart('svg'));
 }
 
 function initAnalysisCards() {
-    const cards = document.querySelectorAll('.card-item');
+    const cards = document.querySelectorAll('.analysis-card-entry');
     cards.forEach(card => {
-        card.removeEventListener('click', card._clickHandler);
+        if (card._clickHandler) card.removeEventListener('click', card._clickHandler);
         const handler = () => openAnalysisPanel(card.dataset.chart);
         card.addEventListener('click', handler);
         card._clickHandler = handler;
     });
-    
-    document.getElementById('close-panel')?.addEventListener('click', () => {
-        const panel = document.getElementById('analysis-panel');
-        if (panel) panel.style.display = 'none';
-        if (currentChartInstance) { currentChartInstance.dispose(); currentChartInstance = null; }
+    document.querySelectorAll('.analysis-toggle-btn').forEach(btn => {
+        if (btn._toggleBound) return;
+        btn._toggleBound = true;
+        btn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            openAnalysisPanel(btn.dataset.chart);
+        });
     });
+    
+    const closeBtn = document.getElementById('close-panel');
+    if (closeBtn && !closeBtn._closeBound) {
+        closeBtn._closeBound = true;
+        closeBtn.addEventListener('click', closeAnalysisPanel);
+    }
 }
 
 function waitForWorkbook() {
@@ -3074,6 +3486,8 @@ function updateTableStats(rows) {
 // ======================= 事件绑定 =======================
 
 function bindEvents() {
+    if (bindEvents._bound) return;
+    bindEvents._bound = true;
     document.getElementById("chart-type")?.addEventListener("change", () => renderMainChart());
     
     document.getElementById("apply-set")?.addEventListener("click", () => {
