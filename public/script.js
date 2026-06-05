@@ -1803,6 +1803,145 @@ function _doRenderInlineChart(chartId, config, isModal) {
         ro.observe(wrapEl);
         chart._ro = ro;
     }
+
+    if (config.type === 'correlation' && Array.isArray(config.trendSeries) && Array.isArray(config.scatterData)) {
+        const isDark = document.body.classList.contains('dark-mode');
+        const textColor = isDark ? '#edf2ff' : '#17233d';
+        const mutedColor = isDark ? '#a8b7d4' : '#52637c';
+        const gridColor = isDark ? '#31415f' : '#e1e8f2';
+        const titleColor = isDark ? '#f8fbff' : '#10213f';
+        const colors = ['#2563eb', '#f97316'];
+        const years = config.years || [];
+        const names = (config.trendSeries || []).map(s => s.name);
+        chartDom.style.height = isModal ? '560px' : '380px';
+        chart.resize({ width: measuredW > 20 ? measuredW : 480, height: isModal ? 560 : 380 });
+        chart.setOption({
+            backgroundColor: 'transparent',
+            color: colors,
+            title: {
+                text: config.title || '双指标相关性分析',
+                subtext: config.correlation != null ? `Pearson r = ${config.correlation}` : '',
+                left: 'center',
+                top: 4,
+                textStyle: { color: titleColor, fontSize: isModal ? 16 : 13, fontWeight: 900 },
+                subtextStyle: { color: mutedColor, fontWeight: 700 }
+            },
+            tooltip: {
+                trigger: 'axis',
+                confine: true,
+                backgroundColor: isDark ? 'rgba(15,23,42,.96)' : 'rgba(255,255,255,.98)',
+                borderColor: isDark ? '#475569' : '#c9d8ee',
+                textStyle: { color: textColor, fontSize: 12 }
+            },
+            legend: {
+                data: names,
+                top: isModal ? 48 : 42,
+                textStyle: { color: textColor, fontWeight: 700 }
+            },
+            grid: [
+                { left: 58, right: 58, top: isModal ? 82 : 72, height: isModal ? 210 : 135, containLabel: true },
+                { left: 58, right: 58, bottom: 42, height: isModal ? 185 : 120, containLabel: true }
+            ],
+            xAxis: [
+                {
+                    type: 'category',
+                    gridIndex: 0,
+                    data: years,
+                    axisLabel: { color: textColor, fontWeight: 700 },
+                    axisLine: { lineStyle: { color: gridColor } },
+                    splitLine: { show: false }
+                },
+                {
+                    type: 'value',
+                    gridIndex: 1,
+                    name: names[0] || 'X',
+                    nameTextStyle: { color: textColor, fontWeight: 800 },
+                    axisLabel: { color: textColor, fontWeight: 700 },
+                    axisLine: { lineStyle: { color: gridColor } },
+                    splitLine: { lineStyle: { color: gridColor, type: 'dashed' } }
+                }
+            ],
+            yAxis: [
+                {
+                    type: 'value',
+                    gridIndex: 0,
+                    name: names[0] || '',
+                    nameTextStyle: { color: colors[0], fontWeight: 800 },
+                    axisLabel: { color: textColor, fontWeight: 700 },
+                    splitLine: { lineStyle: { color: gridColor, type: 'dashed' } }
+                },
+                {
+                    type: 'value',
+                    gridIndex: 0,
+                    name: names[1] || '',
+                    nameTextStyle: { color: colors[1], fontWeight: 800 },
+                    axisLabel: { color: textColor, fontWeight: 700 },
+                    splitLine: { show: false }
+                },
+                {
+                    type: 'value',
+                    gridIndex: 1,
+                    name: names[1] || 'Y',
+                    nameTextStyle: { color: textColor, fontWeight: 800 },
+                    axisLabel: { color: textColor, fontWeight: 700 },
+                    splitLine: { lineStyle: { color: gridColor, type: 'dashed' } }
+                }
+            ],
+            series: [
+                {
+                    name: names[0],
+                    type: 'line',
+                    xAxisIndex: 0,
+                    yAxisIndex: 0,
+                    data: config.trendSeries[0]?.data || [],
+                    smooth: true,
+                    symbolSize: 6,
+                    lineStyle: { width: 2.5 },
+                    areaStyle: { opacity: isDark ? 0.08 : 0.1 }
+                },
+                {
+                    name: names[1],
+                    type: 'line',
+                    xAxisIndex: 0,
+                    yAxisIndex: 1,
+                    data: config.trendSeries[1]?.data || [],
+                    smooth: true,
+                    symbolSize: 6,
+                    lineStyle: { width: 2.5 },
+                    areaStyle: { opacity: isDark ? 0.06 : 0.08 }
+                },
+                {
+                    name: '年度散点',
+                    type: 'scatter',
+                    xAxisIndex: 1,
+                    yAxisIndex: 2,
+                    data: config.scatterData,
+                    symbolSize: isModal ? 11 : 8,
+                    tooltip: {
+                        trigger: 'item',
+                        formatter: p => {
+                            const d = p.data || [];
+                            return `<strong>${d[2]}年</strong><br>${names[0]}：${d[0]}<br>${names[1]}：${d[1]}`;
+                        }
+                    },
+                    label: {
+                        show: isModal,
+                        formatter: p => p.data?.[2] || '',
+                        position: 'top',
+                        color: textColor,
+                        fontWeight: 800,
+                        textBorderColor: isDark ? 'rgba(2,6,23,.85)' : 'rgba(255,255,255,.95)',
+                        textBorderWidth: 2
+                    },
+                    itemStyle: { color: '#7c3aed', shadowBlur: 8, shadowColor: 'rgba(124,58,237,.28)' }
+                }
+            ]
+        });
+        const resizeFn = () => chart.resize();
+        window.addEventListener('resize', resizeFn);
+        chart._resizeFn = resizeFn;
+        return;
+    }
     
     const metric = config.metric;
     const chartType = config.type || 'line';
@@ -2450,6 +2589,15 @@ function updateChartsTheme(isDark) {
     Object.values(_inlineChartInstances || {}).forEach(chart => {
         try { if (chart && !chart.isDisposed()) chart.setOption(optionUpdate, false); } catch(e) {}
     });
+    setTimeout(() => {
+        try {
+            const scatterPanelOpen = document.getElementById('analysis-panel')?.classList.contains('open');
+            const scatterDom = document.getElementById('analysis-chart');
+            if (scatterPanelOpen && scatterDom && window._lastScatterOption && typeof loadChart === 'function') {
+                loadChart('scatter');
+            }
+        } catch (e) {}
+    }, 0);
 }
 
 // ======================= RAG 事件绑定 =======================
@@ -2585,9 +2733,30 @@ function refreshColumnCheckboxList() {
             renderTablePage();
         };
         label.appendChild(cb);
-        label.appendChild(document.createTextNode(h));
+        label.appendChild(document.createTextNode(getTableHeaderLabel(h)));
         container.appendChild(label);
     });
+}
+
+function isCityDetailSheet(sheetName) {
+    return sheetName === '\u5730\u7ea7\u5e02';
+}
+
+function getTableHeaderLabel(header) {
+    if (isCityDetailSheet(tableSheet) && header === '\u65f6\u95f4') return '\u5e74\u4efd';
+    return header;
+}
+
+function orderTableHeadersForSheet(headers, sheetName) {
+    const hasCityShape = headers.includes('\u5730\u533a')
+        && (headers.includes('\u5e74\u4efd') || headers.includes('\u65f6\u95f4') || headers.includes('\u65f6\u95f4\u5730\u533a'));
+    if (!isCityDetailSheet(sheetName) && !hasCityShape) return headers;
+    const firstColumns = ['\u5730\u533a', '\u5e74\u4efd', '\u65f6\u95f4'];
+    const trailingColumns = ['\u65f6\u95f4\u5730\u533a'];
+    const first = firstColumns.filter(h => headers.includes(h));
+    const trailing = trailingColumns.filter(h => headers.includes(h));
+    const rest = headers.filter(h => !first.includes(h) && !trailing.includes(h));
+    return [...first, ...rest, ...trailing];
 }
 
 // ======================= 工作表切换 =======================
@@ -2680,7 +2849,7 @@ function hideSheetSwitchOverlay() {
 function setTableSheet(sheetName, options = {}) {
     tableSheet = sheetName || currentSheet;
     tableRows = window.workbook?.[tableSheet]?.map(row => ({ ...row })) || [];
-    tableHeaders = Object.keys(tableRows[0] || {});
+    tableHeaders = orderTableHeadersForSheet(Object.keys(tableRows[0] || {}), tableSheet);
     visibleColumns.clear();
     tableHeaders.forEach(h => visibleColumns.add(h));
     sortKey = "";
@@ -3905,10 +4074,13 @@ function renderTablePage() {
     const pageData = filteredRowsForPage.slice(start, end);
     const searchVal = currentSearchTerm;
     const visible = tableHeaders.filter(h => visibleColumns.has(h));
+    const isYearLikeColumn = h => h === '\u5e74\u4efd' || h === '\u65f6\u95f4';
+    const isRegionLikeColumn = h => h === '\u5730\u533a';
     
     // 计算统计值
     const stats = {};
     const numericFields = tableHeaders.filter(h => {
+        if (isYearLikeColumn(h) || isRegionLikeColumn(h)) return false;
         if (h === '年份' || h === '地区') return false;
         const sample = filteredRowsForPage[0];
         return sample && typeof sample[h] === 'number';
@@ -3947,7 +4119,7 @@ function renderTablePage() {
         if (sortKey === h) th.classList.add('sort-active');
         th.onclick = () => { sortTable(h); };
         const arrow = sortKey === h ? (sortType === 'asc' ? ' ↑' : ' ↓') : '';
-        th.innerHTML = h + arrow;
+        th.textContent = getTableHeaderLabel(h) + arrow;
         headerRow.appendChild(th);
         
         const td = document.createElement('td');
@@ -3955,6 +4127,11 @@ function renderTablePage() {
         td.style.fontWeight = 'normal';
         td.style.backgroundColor = 'var(--bg-hover)';
         td.style.borderBottom = '1px solid var(--border-color)';
+        if (isYearLikeColumn(h) || isRegionLikeColumn(h)) {
+            td.textContent = isYearLikeColumn(h) ? '\u5e74\u4efd\u8303\u56f4' : '\u5730\u533a\u5217\u8868';
+            statsRow.appendChild(td);
+            return;
+        }
         
         if (h === '年份') {
             td.innerHTML = '年份范围';
@@ -3975,6 +4152,7 @@ function renderTablePage() {
     // 计算每列数值范围（用于热力图着色）
     const colRange = {};
     visible.forEach(h => {
+        if (isYearLikeColumn(h) || isRegionLikeColumn(h)) return;
         if (h === '年份' || h === '地区') return;
         const vals = filteredRowsForPage.map(r => r[h]).filter(v => typeof v === 'number' && !isNaN(v));
         if (vals.length) {
@@ -4455,6 +4633,16 @@ async function loadChart(type) {
             
             const isDark = document.body.classList.contains('dark-mode');
             const isCityScatter = table === 'city';
+            const scatterText = {
+                title: isDark ? '#f8fbff' : '#10213f',
+                axis: isDark ? '#f1f5ff' : '#17233d',
+                axisName: isDark ? '#f8fbff' : '#0f1f3a',
+                axisLine: isDark ? '#9fb7dc' : '#60789d',
+                splitLine: isDark ? '#405576' : '#c7d4e5',
+                label: isDark ? '#ffffff' : '#0f1f3a',
+                labelBorder: isDark ? 'rgba(2,6,23,.86)' : 'rgba(255,255,255,.96)',
+                tooltip: isDark ? '#f8fbff' : '#10213f'
+            };
             
             const option = {
                 backgroundColor: 'transparent',
@@ -4462,14 +4650,14 @@ async function loadChart(type) {
                     text: `${table === 'city' ? '地级市' : '省份'} ${xMetric} vs ${yMetric} (${year}年)`, 
                     left: 'center',
                     top: 8,
-                    textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
+                    textStyle: { color: scatterText.title, fontSize: 15, fontWeight: 900 }
                 },
                 tooltip: {
                     trigger: 'item',
                     confine: true,
                     backgroundColor: isDark ? 'rgba(15,23,42,.94)' : 'rgba(255,255,255,.96)',
                     borderColor: isDark ? '#334155' : '#d8e4f2',
-                    textStyle: { color: isDark ? '#e5edf9' : '#22324a' },
+                    textStyle: { color: scatterText.tooltip, fontSize: 12, fontWeight: 700 },
                     formatter: p => {
                         const item = p.data || [];
                         return `<strong>${escapeHtml(item[2] || '')}</strong><br>${escapeHtml(data.xName || xMetric)}：${item[0]}<br>${escapeHtml(data.yName || yMetric)}：${item[1]}`;
@@ -4490,17 +4678,21 @@ async function loadChart(type) {
                     name: data.xName, 
                     nameLocation: 'middle', 
                     nameGap: 44,
-                    axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
-                    axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
-                    splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
+                    nameTextStyle: { color: scatterText.axisName, fontSize: 12, fontWeight: 800 },
+                    axisLine: { lineStyle: { color: scatterText.axisLine, width: 1.5 } },
+                    axisTick: { lineStyle: { color: scatterText.axisLine } },
+                    axisLabel: { color: scatterText.axis, fontSize: 11, fontWeight: 700 },
+                    splitLine: { lineStyle: { color: scatterText.splitLine, type: 'dashed' } }
                 },
                 yAxis: { 
                     name: data.yName, 
                     nameLocation: 'middle', 
                     nameGap: 52,
-                    axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
-                    axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
-                    splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
+                    nameTextStyle: { color: scatterText.axisName, fontSize: 12, fontWeight: 800 },
+                    axisLine: { lineStyle: { color: scatterText.axisLine, width: 1.5 } },
+                    axisTick: { lineStyle: { color: scatterText.axisLine } },
+                    axisLabel: { color: scatterText.axis, fontSize: 11, fontWeight: 700 },
+                    splitLine: { lineStyle: { color: scatterText.splitLine, type: 'dashed' } }
                 },
                 series: [{
                     type: 'scatter',
@@ -4512,7 +4704,10 @@ async function loadChart(type) {
                         position: 'top', 
                         offset: [0, -8], 
                         fontSize: 10,
-                        color: isDark ? '#dbeafe' : '#263b59'
+                        fontWeight: 800,
+                        color: scatterText.label,
+                        textBorderColor: scatterText.labelBorder,
+                        textBorderWidth: 3
                     },
                     emphasis: {
                         focus: 'self',
@@ -4522,12 +4717,15 @@ async function loadChart(type) {
                             position: 'top',
                             offset: [0, -8],
                             fontSize: 11,
-                            color: isDark ? '#fff' : '#1f2b48',
+                            fontWeight: 900,
+                            color: scatterText.label,
                             backgroundColor: isDark ? 'rgba(15,23,42,.86)' : 'rgba(255,255,255,.9)',
                             borderColor: isDark ? '#475569' : '#d8e4f2',
                             borderWidth: 1,
                             borderRadius: 6,
-                            padding: [3, 6]
+                            padding: [3, 6],
+                            textBorderColor: scatterText.labelBorder,
+                            textBorderWidth: 2
                         },
                         itemStyle: {
                             shadowBlur: 14,

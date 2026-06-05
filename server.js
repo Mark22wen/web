@@ -394,6 +394,174 @@ function buildRelevantMetricSnapshot(row, question = '', entities = {}, maxMetri
         .join('，');
 }
 
+function isAllMetricDetailQuestion(question = '') {
+    return /(各项指标|各项数据|各指标|全部指标|所有指标|全部数据|所有数据|完整指标|指标明细|指标详情|19项指标)/.test(String(question));
+}
+
+function isPartialMetricDetailQuestion(question = '', entities = {}) {
+    const q = String(question);
+    return getMentionedMetricNames(q, entities).length >= 2
+        || /(部分指标|指定指标|这些指标|这几个指标|几个指标|以下指标|若干指标|部分数据)/.test(q);
+}
+
+function getMentionedMetricNames(question = '', entities = {}) {
+    const q = String(question);
+    const candidates = [...(entities.metrics || [])];
+    const aliasGroups = [
+        { keys: ['工业机器人密度', '工业机器人', '机器人密度', '机器人'], metric: '工业机器人密度' },
+        { keys: ['科学支出水平', '科学支出', '科技支出'], metric: '科学支出水平' },
+        { keys: ['人工智能应用水平', '人工智能应用', 'AI应用', 'ai应用'], metric: '人工智能应用水平' },
+        { keys: ['普通高校数量', '高校数量', '大学数量', '高校数'], metric: '普通高校数量' },
+        { keys: ['教育支出水平', '教育支出'], metric: '教育支出水平' },
+        { keys: ['人均受教育年限', '受教育年限'], metric: '人均受教育年限' },
+        { keys: ['互联网普及度', '互联网普及', '网络普及'], metric: '互联网普及度' },
+        { keys: ['发明专利授予数', '发明专利', '专利授予'], metric: '发明专利授予数' },
+        { keys: ['实用新型专利申请授权数', '实用新型专利', '专利申请授权'], metric: '实用新型专利申请授权数' },
+        { keys: ['公共图书馆个数', '图书馆个数', '图书馆数量'], metric: '公共图书馆个数' },
+        { keys: ['每百人公共图书馆藏书', '图书馆藏书', '藏书'], metric: '每百人公共图书馆藏书' },
+        { keys: ['产业结构高级化', '产业结构'], metric: '产业结构高级化' },
+        { keys: ['万人大学生数', '大学生数'], metric: '万人大学生数' },
+        { keys: ['人才引入强度', '人才引入'], metric: '人才引入强度' },
+        { keys: ['R&D人员', '研发人员'], metric: 'R&D人员/年末从业人员数' }
+    ];
+
+    for (const group of aliasGroups) {
+        if (group.keys.some(key => q.includes(key))) candidates.push(group.metric);
+    }
+    for (const metric of metricNameList) {
+        const clean = cleanMetricName(metric);
+        if (q.includes(metric) || q.includes(clean)) candidates.push(metric);
+    }
+
+    const resolved = [];
+    for (const name of candidates) {
+        const clean = cleanMetricName(name);
+        const real = metricNameList.find(metric =>
+            metric === name ||
+            cleanMetricName(metric) === clean ||
+            cleanMetricName(metric).includes(clean) ||
+            clean.includes(cleanMetricName(metric))
+        );
+        if (real && !resolved.includes(real)) resolved.push(real);
+    }
+    return resolved;
+}
+
+function answerAllMetricDetails(question, entities = null) {
+    const parsed = entities || extractEntities(question);
+    const year = parsed.years?.find(y => Number.isInteger(Number(y))) || null;
+    const region = parsed.regions?.[0] || null;
+    const wantsAll = isAllMetricDetailQuestion(question);
+    const wantsPartial = isPartialMetricDetailQuestion(question, parsed);
+    if (!year || !region || (!wantsAll && !wantsPartial)) return null;
+
+    const isNational = region === '全国';
+    const rows = isNational ? rawDataCache.national : rawDataCache.province;
+    const row = rows.find(r => (r['年份'] ?? r['时间']) === Number(year) && (isNational || r['地区'] === region));
+    if (!row) {
+        return {
+            answer: `⚠️ 未找到 **${year}年${region}** 的指标明细数据。\n\n你可以换一个年份，或先问“数据覆盖到哪年”。`,
+            chart: null,
+            citations: [`[来源: ${isNational ? '全国表' : '省份表'}/${region}/${year}]`],
+            reasoning: ['意图: 地区年度全指标明细查询', '未命中对应地区/年份行'],
+            confidence: 0.75,
+            suggestions: [`${region}近10年科学支出水平趋势`, `${year}年各省科学支出水平排名`, `预测2026年${region}科学支出水平`],
+            methodSummary: {
+                type: 'all_metric_detail',
+                title: '年度全指标明细查询',
+                methodLabel: '地区 + 年份 + 全指标明细',
+                methodReason: '用户询问某地区某年份的各项/全部指标时，直接读取结构化数据表中的完整指标列。',
+                params: { region, year, table: isNational ? '全国表' : '省份表' }
+            }
+        };
+    }
+
+    const selectedMetricNames = wantsAll
+        ? metricNameList
+        : [...new Set(getMentionedMetricNames(question, parsed).map(metric => findRealKey(rows, metric) || metric).filter(Boolean))];
+
+    if (!wantsAll && !selectedMetricNames.length) {
+        return {
+            answer: `可以查，但我还需要你指定要看的指标名。\n\n例如：**${region}${year}年科学支出水平、工业机器人密度、普通高校数量**。`,
+            chart: null,
+            citations: [],
+            reasoning: ['意图: 部分指标明细查询', '缺少具体指标名'],
+            confidence: 0.9,
+            suggestions: [
+                `${region}${year}年科学支出水平、工业机器人密度、普通高校数量`,
+                `${region}${year}年教育支出水平和人均受教育年限`,
+                `${region}${year}年发明专利授予数和互联网普及度`
+            ],
+            methodSummary: {
+                type: 'partial_metric_detail_clarify',
+                title: '部分指标明细查询',
+                methodLabel: '地区 + 年份 + 部分指标',
+                methodReason: '用户想查看部分指标，但未给出具体指标名。',
+                params: { region, year, table: isNational ? '全国表' : '省份表' }
+            }
+        };
+    }
+
+    const details = selectedMetricNames
+        .filter(metric => row[metric] !== undefined && row[metric] !== null && row[metric] !== '')
+        .map(metric => ({ metric: cleanMetricName(metric), value: row[metric] }));
+    if (!details.length) {
+        return {
+            answer: `⚠️ 找到了 **${year}年${region}** 的数据行，但没有匹配到你指定的指标。\n\n可以换成平台已有指标名，例如：科学支出水平、工业机器人密度、普通高校数量。`,
+            chart: null,
+            citations: [`[来源: ${isNational ? '全国表' : '省份表'}/${region}/${year}]`],
+            reasoning: ['意图: 部分指标明细查询', '指定指标未命中有效数值'],
+            confidence: 0.75,
+            suggestions: [
+                `${region}${year}年科学支出水平、工业机器人密度、普通高校数量`,
+                `${region}近10年科学支出水平趋势`,
+                `${year}年各省科学支出水平排名`
+            ],
+            methodSummary: {
+                type: 'partial_metric_detail',
+                title: '部分指标明细查询',
+                methodLabel: '地区 + 年份 + 部分指标',
+                methodReason: '用户询问某地区某年份的部分指标时，按指定指标名读取结构化数据表。',
+                params: { region, year, table: isNational ? '全国表' : '省份表', requestedMetrics: parsed.metrics || [] }
+            }
+        };
+    }
+    const tableLines = details.map((item, index) => `| ${index + 1} | ${item.metric} | ${formatValue(Number(item.value))} |`).join('\n');
+    const answer = wantsAll
+        ? `找到了。**${year}年${region}** 共有 **${details.length} 项可用指标**：\n\n| 序号 | 指标 | 数值 |\n|---:|---|---:|\n${tableLines}\n\n这些数值来自${isNational ? '全国表' : '省份表'}原始数据行，适合继续做趋势、排名、预测或地区对比。`
+        : `找到了。**${year}年${region}** 你指定的 **${details.length} 项指标** 如下：\n\n| 序号 | 指标 | 数值 |\n|---:|---|---:|\n${tableLines}\n\n这些数值来自${isNational ? '全国表' : '省份表'}原始数据行。`;
+
+    return {
+        answer,
+        chart: null,
+        citations: [`[来源: ${isNational ? '全国表' : '省份表'}/${region}/${year}]`],
+        reasoning: [wantsAll ? '意图: 地区年度全指标明细查询' : '意图: 地区年度部分指标明细查询', `命中数据行: ${region}/${year}`, `返回指标数: ${details.length}`],
+        confidence: 1,
+        suggestions: [
+            `${region}科学支出水平近10年趋势`,
+            `${year}年各省科学支出水平排名`,
+            `预测2026年${region}科学支出水平`,
+            `江苏和浙江科学支出水平对比`
+        ],
+        methodSummary: {
+            type: wantsAll ? 'all_metric_detail' : 'partial_metric_detail',
+            title: wantsAll ? '年度全指标明细查询' : '年度部分指标明细查询',
+            methodLabel: wantsAll ? '地区 + 年份 + 全指标明细' : '地区 + 年份 + 部分指标明细',
+            methodReason: wantsAll ? '用户询问某地区某年份的各项/全部指标时，直接读取结构化数据表中的完整指标列。' : '用户询问某地区某年份的部分指标时，按指定指标名读取结构化数据表。',
+            params: { region, year, table: isNational ? '全国表' : '省份表', metricCount: details.length }
+        }
+    };
+}
+
+function buildMetricDetailEntitiesWithContext(question, history = []) {
+    const parsed = extractEntities(question);
+    const last = getLastMethodSummary(history);
+    const lastParams = last?.params || {};
+    if (!parsed.regions.length && lastParams.region) parsed.regions = [lastParams.region];
+    if (!parsed.years.length && Number.isInteger(Number(lastParams.year))) parsed.years = [Number(lastParams.year)];
+    return parsed;
+}
+
 function buildHybridKnowledgeIndex() {
     hybridDocuments = [];
     let id = 0;
@@ -2145,6 +2313,153 @@ function answerMultiRegionForecast(question, entities) {
     };
 }
 
+function isCorrelationQuestion(question) {
+    const q = String(question || '');
+    return /(相关|关系|关联|同步|协同|影响|是否.*有关|有没有.*关系|正相关|负相关|相关性|相关系数)/.test(q);
+}
+
+function pearsonCorrelation(points) {
+    if (!Array.isArray(points) || points.length < 3) return null;
+    const xs = points.map(p => p.x);
+    const ys = points.map(p => p.y);
+    const meanX = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const meanY = ys.reduce((a, b) => a + b, 0) / ys.length;
+    let numerator = 0;
+    let denomX = 0;
+    let denomY = 0;
+    for (const p of points) {
+        const dx = p.x - meanX;
+        const dy = p.y - meanY;
+        numerator += dx * dy;
+        denomX += dx * dx;
+        denomY += dy * dy;
+    }
+    const denom = Math.sqrt(denomX * denomY);
+    if (!denom) return null;
+    return numerator / denom;
+}
+
+function correlationStrength(r) {
+    if (typeof r !== 'number') return '无法判断';
+    const abs = Math.abs(r);
+    if (abs >= 0.8) return r > 0 ? '强正相关' : '强负相关';
+    if (abs >= 0.5) return r > 0 ? '中等正相关' : '中等负相关';
+    if (abs >= 0.3) return r > 0 ? '弱正相关' : '弱负相关';
+    return '相关性较弱';
+}
+
+function answerCorrelationAnalysis(question, entities = null) {
+    if (!isCorrelationQuestion(question)) return null;
+    const parsed = entities || extractEntities(question);
+    const metrics = [...new Set((parsed.metrics || []).map(metric => findRealKey(rawDataCache.province, metric) || metric))]
+        .filter(metric => metricNameList.includes(metric))
+        .slice(0, 2);
+    if (metrics.length < 2) return null;
+
+    const region = (parsed.regions && parsed.regions[0]) || '全国';
+    const isNational = region === '全国';
+    const sourceRows = isNational ? rawDataCache.national : rawDataCache.province;
+    const metricA = findRealKey(sourceRows, metrics[0]) || metrics[0];
+    const metricB = findRealKey(sourceRows, metrics[1]) || metrics[1];
+    if (!metricA || !metricB) return null;
+
+    const yearRange = parseYearRange(question);
+    let minYear = yearRange?.length ? Math.min(...yearRange) : null;
+    let maxYear = yearRange?.length ? Math.max(...yearRange) : null;
+    if (!minYear && parsed.years?.length >= 2) {
+        minYear = Math.min(...parsed.years);
+        maxYear = Math.max(...parsed.years);
+    }
+
+    let rows = sourceRows.filter(row => {
+        const year = row['年份'] ?? row['时间'];
+        if (!Number.isInteger(Number(year))) return false;
+        if (!isNational && row['地区'] !== region) return false;
+        if (minYear && year < minYear) return false;
+        if (maxYear && year > maxYear) return false;
+        return typeof row[metricA] === 'number' && typeof row[metricB] === 'number';
+    }).sort((a, b) => (a['年份'] ?? a['时间']) - (b['年份'] ?? b['时间']));
+
+    if (!rows.length) return null;
+    if (!minYear && rows.length > 25) rows = rows.slice(-25);
+
+    const points = rows.map(row => ({
+        year: Number(row['年份'] ?? row['时间']),
+        x: Number(row[metricA]),
+        y: Number(row[metricB])
+    })).filter(p => Number.isFinite(p.year) && Number.isFinite(p.x) && Number.isFinite(p.y));
+    if (points.length < 3) return null;
+
+    const r = pearsonCorrelation(points);
+    const rText = typeof r === 'number' ? r.toFixed(4) : '无法计算';
+    const strength = correlationStrength(r);
+    const first = points[0];
+    const last = points[points.length - 1];
+    const cleanA = cleanMetricName(metricA);
+    const cleanB = cleanMetricName(metricB);
+    const yearLabel = `${first.year}-${last.year}`;
+    const latestDataYear = getLatestYear(rawDataCache.province);
+
+    const trendA = points.map(p => p.x);
+    const trendB = points.map(p => p.y);
+    const answer = `**${region}${yearLabel}年 ${cleanA} 与 ${cleanB} 相关性分析**\n\n`
+        + `基于 ${points.length} 个年度有效样本，Pearson 相关系数 **r = ${rText}**，判断为 **${strength}**。\n\n`
+        + `| 指标 | ${first.year}年 | ${last.year}年 | 变化 |\n|---|---:|---:|---:|\n`
+        + `| ${cleanA} | ${formatValue(first.x)} | ${formatValue(last.x)} | ${formatValue(last.x - first.x)} |\n`
+        + `| ${cleanB} | ${formatValue(first.y)} | ${formatValue(last.y)} | ${formatValue(last.y - first.y)} |\n\n`
+        + `图表建议一起看：上半部分是两个指标的年度趋势，下半部分是散点相关图。需要注意，相关系数表示同步变化程度，不直接等同于因果关系。`;
+
+    return {
+        answer,
+        chart: {
+            type: 'correlation',
+            metric: `${cleanA} vs ${cleanB}`,
+            metrics: [metricA, metricB],
+            region,
+            regions: [region],
+            years: points.map(p => p.year),
+            trendSeries: [
+                { name: cleanA, data: trendA },
+                { name: cleanB, data: trendB }
+            ],
+            scatterData: points.map(p => [p.x, p.y, p.year]),
+            correlation: typeof r === 'number' ? Number(r.toFixed(4)) : null,
+            title: `${region}${cleanA}与${cleanB}相关性`
+        },
+        citations: [`[来源: ${isNational ? '全国表' : '省份表'}/${region}/${yearLabel}/${points.length}年数据]`],
+        reasoning: [
+            '意图: correlation_analysis',
+            `地区: ${region}`,
+            `指标: ${cleanA}、${cleanB}`,
+            `样本: ${points.length}年`,
+            `Pearson r: ${rText}`
+        ],
+        confidence: points.length >= 10 ? 0.9 : 0.72,
+        suggestions: [
+            `${region}${cleanA}近10年趋势`,
+            `${region}${cleanB}近10年趋势`,
+            `${latestDataYear}年各省${cleanA}排名`,
+            `换一个地区继续分析${cleanA}和${cleanB}相关性`
+        ],
+        toolTrace: [{
+            tool: 'correlation_analysis',
+            normalizedTool: 'correlation_analysis',
+            params: { region, metrics: [metricA, metricB], years: points.map(p => p.year) },
+            success: true,
+            type: 'correlation'
+        }],
+        methodSummary: {
+            type: 'correlation_analysis',
+            title: `${region}${cleanA}与${cleanB}相关性`,
+            methodLabel: '双指标时序匹配 + Pearson 相关系数',
+            methodReason: '用户询问两个指标之间的关系时，按同一地区同一年份对齐两个指标，计算相关系数，并同时返回趋势图和散点图。',
+            params: { region, metrics: [metricA, metricB], years: points.map(p => p.year) },
+            regions: [region],
+            metric: `${cleanA} vs ${cleanB}`
+        }
+    };
+}
+
 function isMethodFollowup(question) {
     const q = String(question || '').trim();
     if (isForecastMethodOptionQuestion(q)) return false;
@@ -2648,6 +2963,12 @@ async function runAgent(question, recentHistory = []) {
     // ── 平台事实类问题：直接从数据源返回，不走LLM ──────
     // 这类问题LLM无法准确回答，必须从真实数据读取
 
+    const allMetricDetails = answerAllMetricDetails(q, buildMetricDetailEntitiesWithContext(q, recentHistory));
+    if (allMetricDetails) return allMetricDetails;
+
+    const correlationAnalysis = answerCorrelationAnalysis(q, extractEntities(q));
+    if (correlationAnalysis) return correlationAnalysis;
+
     // 1. 指标列表查询
     if (/(有哪些指标|指标有哪些|指标列表|包含哪些指标|指标是什么|什么指标|哪些指标|指标名称|都有什么指标|指标都有|全部指标|所有指标)/.test(q)) {
         const realMetrics = metricNameList.map((m, i) => `${i + 1}. ${cleanMetricName(m)}`).join('\n');
@@ -3045,6 +3366,10 @@ ${historyHint || '无'}
     return fallback;
 }
 async function runAgentBatch(question, history = []) {
+    const metricDetails = answerAllMetricDetails(question.trim(), buildMetricDetailEntitiesWithContext(question.trim(), history));
+    if (metricDetails) return metricDetails;
+    const correlationAnalysis = answerCorrelationAnalysis(question.trim(), extractEntities(question.trim()));
+    if (correlationAnalysis) return correlationAnalysis;
     const parts = await planCompoundQuestions(question, history);
     if (parts.length <= 1) {
         return runAgent(question.trim(), history);
