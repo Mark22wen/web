@@ -1,3 +1,8 @@
+const _origFetch = window.fetch;
+window.fetch = (url, opts = {}) => {
+    opts.headers = { ...(opts.headers || {}), 'ngrok-skip-browser-warning': 'true' };
+    return _origFetch(url, opts);
+};
 // ======================= 工具函数 =======================
 function log(...args) {
     console.log("[Platform]", ...args);

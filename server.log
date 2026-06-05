@@ -1,0 +1,9 @@
+🚀 服务启动 → http://localhost:3001
+🤖 推理引擎: DeepSeek API (deepseek-chat)
+📊 共加载 19 个指标：科学支出水平、工业机器人密度、人工智能应用水平、产业结构高级化、互联网普及度...
+📊 数据缓存完成
+✅ 本地混合知识索引构建完成 (800条)
+✅ ChromaDB 知识库已连接: patent_knowledge / 49500 条
+BM25 构建失败: Error executing plan: Internal error: error returned from database: (code: 1) too many SQL variables
+🧹 会话策略: history=on, ttl=30min, maxSessions=500, maxHistory=6
+✅ 就绪，等待提问...

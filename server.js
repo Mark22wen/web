@@ -1,4 +1,6 @@
-﻿require('dotenv').config();
+﻿process.on('uncaughtException', err => console.error('uncaughtException:', err.message));
+process.on('unhandledRejection', err => console.error('unhandledRejection:', err?.message));
+require('dotenv').config();
 const FlexSearch = require('flexsearch');
 const express = require('express');
 const cors = require('cors');
@@ -45,10 +47,13 @@ app.use(cors({
     origin(origin, callback) {
         if (!origin) return callback(null, true);
         if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
+        if (/\.ngrok-free\.dev$/.test(origin)) return callback(null, true);
+        if (/\.ngrok\.io$/.test(origin)) return callback(null, true);
         if (allowedOrigins.includes(origin)) return callback(null, true);
         return callback(new Error('CORS origin denied'));
     }
 }));
+app.use((req, res, next) => { res.setHeader('ngrok-skip-browser-warning', 'true'); next(); });
 app.use(express.json({ limit: '256kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
