@@ -105,17 +105,17 @@ function initLanding() {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     
     // ---- 多层粒子系统 ----
-    const particlesCount = 900;
+    const particlesCount = window.matchMedia('(max-width: 768px)').matches ? 320 : 680;
     const posArray = new Float32Array(particlesCount * 3);
     const colorArray = new Float32Array(particlesCount * 3);
     const speedArray = new Float32Array(particlesCount); // individual drift speeds
     const sizeArray = new Float32Array(particlesCount);
 
     const palette = [
-        [0.79, 0.66, 0.30],  // academic gold
-        [0.85, 0.75, 0.38],  // bright gold
-        [0.70, 0.50, 0.18],  // amber
-        [0.90, 0.82, 0.50],  // light gold
+        [0.18, 0.48, 0.92],
+        [0.20, 0.72, 0.88],
+        [0.62, 0.80, 1.00],
+        [0.86, 0.74, 0.38],
     ];
     
     for (let i = 0; i < particlesCount; i++) {
@@ -131,7 +131,7 @@ function initLanding() {
         colorArray[i3+2] = col[2] + Math.random() * 0.08;
         
         speedArray[i] = 0.3 + Math.random() * 0.7;
-        sizeArray[i] = 0.05 + Math.random() * 0.1;
+        sizeArray[i] = 0.07 + Math.random() * 0.12;
     }
     
     const particlesGeometry = new THREE.BufferGeometry();
@@ -139,10 +139,10 @@ function initLanding() {
     particlesGeometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
     
     const particlesMaterial = new THREE.PointsMaterial({
-        size: 0.07,
+        size: 0.095,
         vertexColors: true,
         transparent: true,
-        opacity: 0.75,
+        opacity: 0.92,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
     });
@@ -152,7 +152,7 @@ function initLanding() {
     threeScene.disposables.push(particlesMesh);
     
     // ---- Connection lines system (LineSegments) ----
-    const MAX_LINES = 800;
+    const MAX_LINES = 980;
     const linePositions = new Float32Array(MAX_LINES * 6); // 2 points * xyz
     const lineColors = new Float32Array(MAX_LINES * 6);
     const lineGeo = new THREE.BufferGeometry();
@@ -161,7 +161,7 @@ function initLanding() {
     const lineMat = new THREE.LineBasicMaterial({
         vertexColors: true,
         transparent: true,
-        opacity: 0.18,
+        opacity: 0.28,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
     });
@@ -177,7 +177,7 @@ function initLanding() {
             pts.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius * 0.3, 0));
         }
         const geo = new THREE.BufferGeometry().setFromPoints(pts);
-        const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending });
+        const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending });
         const ring = new THREE.Line(geo, mat);
         ring.rotation.x = tilt;
         scene.add(ring);
@@ -330,7 +330,267 @@ function showLanding() {
 
 function scrollToFeatures() {
     const el = document.getElementById('features-section');
-    if (el) el.scrollIntoView({ behavior: 'smooth' });
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'auto', block: 'start' });
+}
+
+function enterSdufeCover() {
+    const cover = document.getElementById('sdufe-cover');
+    if (!cover) return;
+    cover.classList.add('slide-out');
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    setTimeout(() => {
+        cover.style.display = 'none';
+        document.body.classList.remove('sdufe-cover-active');
+        document.body.classList.add('sdufe-cover-seen');
+        initLanding();
+    }, 420);
+}
+
+function returnToSdufeCover() {
+    const cover = document.getElementById('sdufe-cover');
+    if (!cover) return;
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    document.body.classList.add('sdufe-cover-active');
+    cover.style.display = 'flex';
+    cover.classList.remove('slide-out');
+    document.body.classList.remove('sdufe-cover-seen');
+}
+
+function initSdufeCover() {
+    const cover = document.getElementById('sdufe-cover');
+    if (!cover || cover._bound) return;
+    cover._bound = true;
+    document.body.classList.add('sdufe-cover-active');
+
+    const seal = document.getElementById('relief-seal-el') || cover.querySelector('.relief-seal');
+    let cursor = cover.querySelector('.sdufe-cover-cursor');
+    if (!cursor) {
+        cursor = document.createElement('div');
+        cursor.className = 'sdufe-cover-cursor';
+        cursor.setAttribute('aria-hidden', 'true');
+        cover.appendChild(cursor);
+    }
+    let brushRadius = 0;
+    let targetRadius = 0;
+    let rafId = null;
+    let autoPausedUntil = 0;
+    let calibrationProgress = 0;
+    let lastProbeAt = 0;
+    const probe = {
+        x: 50, y: 48, tx: 50, ty: 48,
+        px: 50, py: 48, angle: 0, stretch: 1,
+        visible: 0, targetVisible: 0
+    };
+    let meter = cover.querySelector('.sdufe-calibration-meter');
+    if (!meter) {
+        meter = document.createElement('div');
+        meter.className = 'sdufe-calibration-meter';
+        meter.setAttribute('aria-hidden', 'true');
+        meter.innerHTML = '<span>CALIBRATING DATA SURFACE</span><i></i>';
+        cover.appendChild(meter);
+    }
+
+    function setCalibrationProgress(next) {
+        calibrationProgress = Math.max(0, Math.min(1, next));
+        const rest = 1 - calibrationProgress;
+        cover.style.setProperty('--cal', calibrationProgress.toFixed(3));
+        cover.style.setProperty('--cal-width', `${(calibrationProgress * 100).toFixed(1)}%`);
+        cover.style.setProperty('--cal-blur', `${(rest * 1.4).toFixed(2)}px`);
+        cover.style.setProperty('--cal-title-blur', `${(rest * 0.9).toFixed(2)}px`);
+        cover.style.setProperty('--cal-shift', `${(rest * -8).toFixed(2)}px`);
+        cover.style.setProperty('--cal-enter-y', `${(rest * 5).toFixed(2)}px`);
+        cover.style.setProperty('--cal-text-opacity', (0.58 + calibrationProgress * 0.34).toFixed(3));
+        cover.style.setProperty('--cal-enter-opacity', (0.64 + calibrationProgress * 0.36).toFixed(3));
+        cover.style.setProperty('--cal-shadow-alpha', (0.10 + calibrationProgress * 0.12).toFixed(3));
+        cover.style.setProperty('--cal-border-alpha', (0.12 + calibrationProgress * 0.18).toFixed(3));
+        cover.style.setProperty('--cal-saturate', (0.82 + calibrationProgress * 0.28).toFixed(3));
+        cover.style.setProperty('--cal-ghost-a', (rest * 0.16).toFixed(3));
+        cover.style.setProperty('--cal-ghost-b', (rest * 0.38).toFixed(3));
+        cover.style.setProperty('--cal-ghost-x', `${(rest * 8).toFixed(2)}px`);
+        cover.style.setProperty('--cal-ghost-y', `${(rest * -5).toFixed(2)}px`);
+        cover.classList.toggle('calibrated', calibrationProgress >= 0.72);
+        cover.classList.toggle('calibrating', calibrationProgress > 0.04 && calibrationProgress < 0.72);
+        if (meter) meter.style.setProperty('--cal', calibrationProgress.toFixed(3));
+    }
+    setCalibrationProgress(0.12);
+
+    const coverVisible = () => document.body.classList.contains('sdufe-cover-active')
+        && cover.offsetParent !== null
+        && getComputedStyle(cover).display !== 'none';
+
+    function animateProbe() {
+        if (!coverVisible()) {
+            setTimeout(() => requestAnimationFrame(animateProbe), 500);
+            return;
+        }
+        probe.px = probe.x;
+        probe.py = probe.y;
+        probe.x += (probe.tx - probe.x) * 0.14;
+        probe.y += (probe.ty - probe.y) * 0.14;
+        const vx = probe.x - probe.px;
+        const vy = probe.y - probe.py;
+        const speed = Math.min(1, Math.sqrt(vx * vx + vy * vy) / 2.8);
+        probe.angle += ((Math.atan2(vy, vx) * 180 / Math.PI || probe.angle) - probe.angle) * 0.16;
+        probe.stretch += ((1 + speed * 0.38) - probe.stretch) * 0.18;
+        probe.visible += (probe.targetVisible - probe.visible) * 0.16;
+        cover.style.setProperty('--probe-x', `${probe.x.toFixed(2)}%`);
+        cover.style.setProperty('--probe-y', `${probe.y.toFixed(2)}%`);
+        cover.style.setProperty('--probe-angle', `${probe.angle.toFixed(2)}deg`);
+        cover.style.setProperty('--probe-stretch', probe.stretch.toFixed(3));
+        cover.style.setProperty('--probe-squash', (1 / Math.sqrt(probe.stretch)).toFixed(3));
+        cover.style.setProperty('--cursor-opacity', probe.visible.toFixed(3));
+        cover.style.setProperty('--cursor-scale', (0.72 + probe.visible * 0.28).toFixed(3));
+        requestAnimationFrame(animateProbe);
+    }
+    requestAnimationFrame(animateProbe);
+
+    function animateBrush() {
+        brushRadius += (targetRadius - brushRadius) * 0.10;
+        const diff = Math.abs(targetRadius - brushRadius);
+        if (seal) {
+            seal.style.setProperty('--br', `${brushRadius.toFixed(1)}px`);
+        }
+        // activate class when brush is meaningfully open
+        if (brushRadius > 8) {
+            seal?.classList.add('brush-active');
+        } else {
+            seal?.classList.remove('brush-active');
+        }
+        if (diff > 0.4) {
+            rafId = requestAnimationFrame(animateBrush);
+        } else {
+            brushRadius = targetRadius;
+            if (seal) seal.style.setProperty('--br', `${brushRadius.toFixed(1)}px`);
+            rafId = null;
+        }
+    }
+
+    const update = (clientX, clientY) => {
+        autoPausedUntil = Date.now() + 1800;
+        const now = Date.now();
+        if (now - lastProbeAt > 48) {
+            setCalibrationProgress(calibrationProgress + 0.018);
+            lastProbeAt = now;
+        }
+        // Update parallax vars on cover
+        const rect = cover.getBoundingClientRect();
+        const x = ((clientX - rect.left) / rect.width * 100).toFixed(2);
+        const y = ((clientY - rect.top) / rect.height * 100).toFixed(2);
+        cover.style.setProperty('--mx', `${x}%`);
+        cover.style.setProperty('--my', `${y}%`);
+        probe.tx = Number(x);
+        probe.ty = Number(y);
+        probe.targetVisible = 1;
+        cover.style.setProperty('--move-x', `${((parseFloat(x) - 50) * 0.18).toFixed(2)}px`);
+        cover.style.setProperty('--move-y', `${((parseFloat(y) - 50) * 0.14).toFixed(2)}px`);
+        const moveX = (parseFloat(x) - 50) * 0.18;
+        const moveY = (parseFloat(y) - 50) * 0.14;
+        cover.style.setProperty('--bgword-move-x', `${(moveX * -0.25).toFixed(2)}px`);
+        cover.style.setProperty('--bgword-move-y', `${(moveY * -0.18).toFixed(2)}px`);
+        cover.style.setProperty('--seal-move-x', `${(moveX * 0.22).toFixed(2)}px`);
+        cover.style.setProperty('--seal-move-y', `${(moveY * 0.18).toFixed(2)}px`);
+        cover.classList.add('is-probing');
+
+        if (!seal) return;
+        const sealRect = seal.getBoundingClientRect();
+        const cx = sealRect.left + sealRect.width / 2;
+        const cy = sealRect.top + sealRect.height / 2;
+        const dist = Math.sqrt((clientX - cx) ** 2 + (clientY - cy) ** 2);
+        const pad = Math.min(22, Math.max(10, sealRect.width * 0.05));
+        const insideSealField = clientX >= sealRect.left - pad
+            && clientX <= sealRect.right + pad
+            && clientY >= sealRect.top - pad
+            && clientY <= sealRect.bottom + pad;
+        const triggerDist = Math.max(sealRect.width, sealRect.height) * 0.72;
+
+        if (insideSealField) {
+            // Brush center follows mouse relative to seal
+            const bx = ((clientX - sealRect.left) / sealRect.width * 100).toFixed(1);
+            const by = ((clientY - sealRect.top) / sealRect.height * 100).toFixed(1);
+            seal.style.setProperty('--mx', `${bx}%`);
+            seal.style.setProperty('--my', `${by}%`);
+            seal.style.setProperty('--bx', `${bx}%`);
+            seal.style.setProperty('--by', `${by}%`);
+            const prox = 1 - Math.min(dist / triggerDist, 1);
+            targetRadius = 34 + prox * 150;
+            setCalibrationProgress(calibrationProgress + 0.028 + prox * 0.018);
+        } else {
+            targetRadius = 0;
+        }
+        if (!rafId) rafId = requestAnimationFrame(animateBrush);
+    };
+
+    cover.addEventListener('mousemove', e => update(e.clientX, e.clientY));
+    cover.addEventListener('mouseleave', () => {
+        autoPausedUntil = Date.now() + 700;
+        targetRadius = 0;
+        cover.classList.remove('is-probing');
+        probe.targetVisible = 0;
+        cover.style.setProperty('--move-x', '0px');
+        cover.style.setProperty('--move-y', '0px');
+        cover.style.setProperty('--bgword-move-x', '0px');
+        cover.style.setProperty('--bgword-move-y', '0px');
+        cover.style.setProperty('--seal-move-x', '0px');
+        cover.style.setProperty('--seal-move-y', '0px');
+        if (!rafId) rafId = requestAnimationFrame(animateBrush);
+    });
+    cover.addEventListener('touchmove', e => {
+        autoPausedUntil = Date.now() + 2200;
+        if (e.touches?.[0]) update(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+
+    const autoSweep = () => {
+        if (!coverVisible()) {
+            setTimeout(() => requestAnimationFrame(autoSweep), 500);
+            return;
+        }
+        if (seal && Date.now() > autoPausedUntil) {
+            const phase = (Date.now() % 5200) / 5200;
+            const active = phase > 0.18 && phase < 0.74;
+            if (active) {
+                const p = (phase - 0.18) / 0.56;
+                const eased = 0.5 - Math.cos(p * Math.PI) / 2;
+                const bx = 18 + eased * 64;
+                const by = 48 + Math.sin(p * Math.PI * 2) * 8;
+                seal.style.setProperty('--mx', `${bx.toFixed(1)}%`);
+                seal.style.setProperty('--my', `${by.toFixed(1)}%`);
+                seal.style.setProperty('--bx', `${bx.toFixed(1)}%`);
+                seal.style.setProperty('--by', `${by.toFixed(1)}%`);
+                targetRadius = 74 + Math.sin(p * Math.PI) * 38;
+                setCalibrationProgress(calibrationProgress + 0.0032);
+            } else {
+                targetRadius = 0;
+                if (calibrationProgress > 0.08 && calibrationProgress < 0.72) {
+                    setCalibrationProgress(calibrationProgress - 0.0008);
+                }
+            }
+            if (!rafId) rafId = requestAnimationFrame(animateBrush);
+        }
+        requestAnimationFrame(autoSweep);
+    };
+    requestAnimationFrame(autoSweep);
+}
+
+function forceResizeAllCharts() {
+    // Defer to next animation frames so containers have measurable dimensions
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            [mainChart, pieChart, advancedChart, rankChart].forEach(c => {
+                try { if (c && !c.isDisposed?.()) c.resize(); } catch(e) {}
+            });
+            // Re-render main chart to recompute layout with new container size
+            try { if (typeof renderMainChart === 'function' && mainChart && !mainChart.isDisposed?.()) renderMainChart(); } catch(e) {}
+            try { if (typeof renderPieChart === 'function' && pieChart && !pieChart.isDisposed?.() && pieAvailableMetrics?.length) renderPieChart(); } catch(e) {}
+            try { if (typeof renderAdvancedChart === 'function' && advancedChart && !advancedChart.isDisposed?.() && advMetrics?.length) renderAdvancedChart(); } catch(e) {}
+        });
+    });
+    // Extra safety: one more resize after ~250ms for charts that initialize slowly
+    setTimeout(() => {
+        [mainChart, pieChart, advancedChart, rankChart].forEach(c => {
+            try { if (c && !c.isDisposed?.()) c.resize(); } catch(e) {}
+        });
+    }, 250);
 }
 
 function enterDashboard(tab) {
@@ -376,6 +636,8 @@ function enterDashboard(tab) {
                 dp.style.opacity = '1';
                 dp.style.transform = 'translateY(0)';
             });
+            // Critical: charts were initialized when dashboard was hidden (0×0). Resize now.
+            forceResizeAllCharts();
         }
         if (fab) {
             fab.style.display = 'flex'; fab.style.opacity = '0';
@@ -384,15 +646,21 @@ function enterDashboard(tab) {
         
         // Route to specific section based on tab
         if (tab === 'pie') {
-            // Make sure pie card is visible and scroll to it
             setTimeout(() => {
                 const pie = document.getElementById('section-pie');
                 if (pie) { pie.style.display = 'block'; pie.scrollIntoView({behavior:'smooth',block:'start'}); }
+                forceResizeAllCharts();
             }, 400);
         } else if (tab === 'scatter') {
             setTimeout(() => {
                 const sc = document.getElementById('section-scatter');
                 if (sc) { sc.style.display = 'block'; sc.scrollIntoView({behavior:'smooth',block:'start'}); openAnalysisPanel('scatter'); }
+                forceResizeAllCharts();
+            }, 400);
+        } else if (tab === 'table') {
+            setTimeout(() => {
+                const t = document.getElementById('section-table');
+                if (t) t.scrollIntoView({behavior:'smooth',block:'start'});
             }, 400);
         }
         // 'rank' and default just show dashboard normally
@@ -424,9 +692,39 @@ function initHeroPreview() {
         panels.forEach(panel => panel.classList.toggle('active', panel.dataset.previewPanel === name));
     };
 
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => activate(tab.dataset.preview));
+    let previewIndex = Math.max(0, tabs.findIndex(tab => tab.classList.contains('active')));
+    let previewPaused = false;
+
+    tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => {
+            previewIndex = index;
+            activate(tab.dataset.preview);
+        });
     });
+
+    card.addEventListener('mouseenter', () => { previewPaused = true; });
+    card.addEventListener('mouseleave', () => {
+        previewPaused = false;
+        card.style.removeProperty('--px');
+        card.style.removeProperty('--py');
+        card.style.removeProperty('--tilt-x');
+        card.style.removeProperty('--tilt-y');
+    });
+    card.addEventListener('mousemove', (event) => {
+        const rect = card.getBoundingClientRect();
+        const x = (event.clientX - rect.left) / rect.width;
+        const y = (event.clientY - rect.top) / rect.height;
+        card.style.setProperty('--px', `${(x * 100).toFixed(2)}%`);
+        card.style.setProperty('--py', `${(y * 100).toFixed(2)}%`);
+        card.style.setProperty('--tilt-x', `${((0.5 - y) * 3).toFixed(2)}deg`);
+        card.style.setProperty('--tilt-y', `${((x - 0.5) * 3).toFixed(2)}deg`);
+    });
+
+    setInterval(() => {
+        if (previewPaused || tabs.length < 2 || document.body.classList.contains('sdufe-cover-active')) return;
+        previewIndex = (previewIndex + 1) % tabs.length;
+        activate(tabs[previewIndex].dataset.preview);
+    }, 3400);
 
     card.querySelectorAll('.preview-action').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -438,6 +736,117 @@ function initHeroPreview() {
 }
 
 // ======================= RAG 全屏界面 =======================
+
+function initLandingScrollHint() {
+    if (initLandingScrollHint._bound) return;
+    initLandingScrollHint._bound = true;
+    const hint = document.querySelector('.hero-scroll-hint');
+    if (hint) hint.style.display = 'none';
+    const features = document.getElementById('features-section');
+    if (features && !document.querySelector('.landing-section-divider')) {
+        const divider = document.createElement('div');
+        divider.className = 'landing-section-divider';
+        divider.innerHTML = '<span>核心模块</span>';
+        features.parentNode.insertBefore(divider, features);
+    }
+    const update = () => {
+        const landing = document.getElementById('landing-page');
+        if (!landing) return;
+        landing.classList.toggle('landing-scrolled', window.scrollY > 80);
+    };
+    window.addEventListener('scroll', update, { passive: true });
+    update();
+}
+
+function refineLandingCapabilities() {
+    if (refineLandingCapabilities._done) return;
+    refineLandingCapabilities._done = true;
+    const section = document.querySelector('.capability-grid-section');
+    if (!section) return;
+    const eyebrow = section.querySelector('.section-eyebrow');
+    const title = section.querySelector('.section-title');
+    const sub = section.querySelector('.section-sub');
+    if (eyebrow) eyebrow.textContent = 'AI 助手增强能力';
+    if (title) title.textContent = '让数据分析更像一次专业协作';
+    if (sub) sub.textContent = '上方是核心功能入口，这里展示 AI 助手能额外完成的研究辅助任务。';
+
+    const cards = [...section.querySelectorAll('.cap-card')];
+    const copy = [
+        {
+            title: '多问题一次回答',
+            desc: '一次输入排名、趋势、对比、预测等多个问题，助手会自动拆解成子任务，逐项分析后合并为完整答复。',
+            tags: ['自动拆题', '顺序执行', '结果合并', '上下文继承']
+        },
+        { title: '异常与短板发现', desc: '围绕某个指标自动提示高低值、离群地区和可能需要重点关注的变化方向。' },
+        { title: '方法解释与可信度', desc: '对预测、排名、对比结果补充方法说明、样本年份、回测误差和置信区间。' },
+        { title: '研究口径整理', desc: '把地区、年份、指标和数据来源整理成可复用的分析口径，减少重复筛选。' },
+        { title: '报告摘要生成', desc: '把图表发现归纳为适合汇报使用的结论、建议和下一步追问方向。' }
+    ];
+
+    cards.forEach((card, index) => {
+        const item = copy[index];
+        if (!item) return;
+        const h3 = card.querySelector('h3');
+        const p = card.querySelector('p');
+        if (h3) h3.textContent = item.title;
+        if (p) p.textContent = item.desc;
+        const tagRow = card.querySelector('.cap-tag-row');
+        if (tagRow && item.tags) {
+            tagRow.innerHTML = item.tags.map(tag => `<span class="cap-tag">${escapeHtml(tag)}</span>`).join('');
+        }
+    });
+}
+
+function refineRagCapabilityBadges() {
+    const caps = document.querySelector('.rag-caps');
+    if (!caps || refineRagCapabilityBadges._done) return;
+    refineRagCapabilityBadges._done = true;
+    caps.innerHTML = ['多问题拆解', '数据检索', '趋势预测', '方法解释']
+        .map(text => `<span class="rag-cap-chip">${escapeHtml(text)}</span>`)
+        .join('');
+}
+
+function initSheetSwitchGuide() {
+    const toolbar = document.querySelector('.dash-toolbar-card');
+    const select = document.getElementById('sheet-list');
+    if (!toolbar || !select || toolbar.querySelector('.sheet-switch-guide')) return;
+    if (!select.parentElement?.classList.contains('sheet-select-wrap')) {
+        const wrap = document.createElement('span');
+        wrap.className = 'sheet-select-wrap';
+        select.parentNode.insertBefore(wrap, select);
+        wrap.appendChild(select);
+    }
+    const guide = document.createElement('div');
+    guide.className = 'sheet-switch-guide';
+    guide.innerHTML = `
+        <span class="guide-pulse-dot"></span>
+        <span>在这里切换全国、省份和地级市数据表</span>
+    `;
+    toolbar.appendChild(guide);
+    select.title = '切换全国、省份、地级市工作表';
+}
+
+function ensureDashboardAnalysisVisible() {
+    const sc = document.getElementById('section-scatter');
+    if (sc) sc.style.display = 'block';
+}
+
+function initPaginationGuide() {
+    const bar = document.querySelector('.pagination-bar');
+    const input = document.getElementById('page-goto');
+    const btn = document.getElementById('page-go');
+    if (input) {
+        input.placeholder = '页码';
+        input.title = '输入页码后点击 GO 跳转';
+        input.setAttribute('aria-label', '跳转页码');
+    }
+    if (btn) btn.title = '跳转到输入的页码';
+    if (!bar || bar.querySelector('.pagination-guide')) return;
+    const guide = document.createElement('span');
+    guide.className = 'pagination-guide';
+    guide.textContent = '输入页码后点 GO 跳转';
+    bar.appendChild(guide);
+}
 
 function openRagFullscreen(options = {}) {
     const rag = document.getElementById('rag-fullscreen');
@@ -462,8 +871,13 @@ function openRagFullscreen(options = {}) {
     const fab = document.getElementById('chat-float-btn');
     if (fab) fab.style.display = 'none';
     
-    // Init session if needed
-    if (!currentSessionId) {
+    // Init session: each page visit starts with a fresh chat, while history remains available.
+    if (ragAutoFreshSessionPending) {
+        ragAutoFreshSessionPending = false;
+        startNewSession();
+        const hint = document.getElementById('rag-context-hint');
+        if (hint) hint.innerHTML = '<span>新对话已开启，左侧可切换历史对话。</span>';
+    } else if (!currentSessionId) {
         if (sessions.length) {
             switchSession(sessions[0].id);
         } else {
@@ -491,10 +905,6 @@ function closeRagFullscreen() {
     const rag = document.getElementById('rag-fullscreen');
     if (rag) rag.style.display = 'none';
     document.body.classList.remove('rag-open');
-    if (ragReturnPage === 'landing') {
-        showLanding();
-        return;
-    }
     const lp = document.getElementById('landing-page');
     const dp = document.getElementById('dashboard-page');
     if (lp) lp.style.display = 'none';
@@ -502,9 +912,11 @@ function closeRagFullscreen() {
         dp.style.display = 'block';
         dp.style.opacity = '1';
         dp.style.transform = 'translateY(0)';
+        forceResizeAllCharts();
     }
     const fab = document.getElementById('chat-float-btn');
     if (fab) fab.style.display = 'flex';
+    ragReturnPage = 'dashboard';
 }
 
 function sendRagQuick(question) {
@@ -520,6 +932,7 @@ let isRagStreaming = false;
 // ===== Multi-session conversation management =====
 let sessions = JSON.parse(localStorage.getItem('rag_sessions') || '[]');
 let currentSessionId = null;
+let ragAutoFreshSessionPending = true;
 
 function createSession(title) {
     const id = 'sess_' + Date.now();
@@ -592,11 +1005,12 @@ function renderSessionList() {
         return;
     }
     
-    list.innerHTML = sessions.map(s => {
+    const renameHint = '<div class="session-rename-tip">提示：双击对话名称可重命名</div>';
+    list.innerHTML = renameHint + sessions.map(s => {
         const isActive = s.id === currentSessionId;
         const msgCount = s.messages.filter(m => m.role === 'user').length;
         const shortTitle = s.title.length > 22 ? s.title.slice(0,20) + '…' : s.title;
-        return '<div class="session-item' + (isActive ? ' active' : '') + '" data-session-id="' + s.id + '">'
+        return '<div class="session-item' + (isActive ? ' active' : '') + '" data-session-id="' + s.id + '" title="单击切换，双击重命名">'
             + '<div class="session-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-msg"/></svg></div>'
             + '<div class="session-title">' + escapeHtml(shortTitle) + '</div>'
             + '<div class="session-meta">' + msgCount + ' 条</div>'
@@ -637,6 +1051,23 @@ document.addEventListener('click', function(e) {
     }
 });
 
+document.addEventListener('dblclick', function(e) {
+    const item = e.target.closest('.session-item[data-session-id]');
+    if (!item || e.target.closest('.session-delete')) return;
+    const session = sessions.find(s => s.id === item.dataset.sessionId);
+    if (!session) return;
+    const nextTitle = prompt('重命名对话', session.title || '新对话');
+    if (!nextTitle) return;
+    session.title = nextTitle.trim().slice(0, 40) || session.title;
+    saveSessions();
+    renderSessionList();
+    syncSessionSelect();
+    if (session.id === currentSessionId) {
+        const titleEl = document.getElementById('rag-session-title');
+        if (titleEl) titleEl.textContent = session.title;
+    }
+});
+
 function startNewSession() {
     const session = createSession('新对话');
     switchSession(session.id);
@@ -670,7 +1101,24 @@ async function sendRagMessage() {
     
     // 添加助手占位
     const assistantBubble = addRagMessage('assistant', '', true);
+        assistantBubble.innerHTML = `
+        <div class="rag-live-process">
+            <div class="rag-live-title">正在思考与检索...</div>
+            <div class="rag-live-steps">
+                <span class="active">识别问题</span>
+                <span>查找数据</span>
+                <span>调用工具</span>
+                <span>组织回复</span>
+            </div>
+        </div>`;
     isRagStreaming = true;
+    const liveSteps = [...assistantBubble.querySelectorAll('.rag-live-steps span')];
+    let liveStepIndex = 0;
+    const liveProgressTimer = setInterval(() => {
+        if (!liveSteps.length) return;
+        liveStepIndex = Math.min(liveStepIndex + 1, liveSteps.length - 1);
+        liveSteps.forEach((step, index) => step.classList.toggle('active', index <= liveStepIndex));
+    }, 850);
     
     const sendBtn = document.getElementById('rag-send');
     if (sendBtn) sendBtn.disabled = true;
@@ -702,11 +1150,12 @@ async function sendRagMessage() {
         
         // 构建HTML
         let html = '';
+        let processHtml = '';
         
         // 思维链
         if (data.reasoning && data.reasoning.length > 0) {
-            html += `<div class="rag-reasoning">
-                <div class="rag-reasoning-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><use href="#ico-brain"/></svg> 分析过程</div>
+            processHtml += `<div class="rag-reasoning">
+                <div class="rag-reasoning-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><use href="#ico-brain"/></svg> 思考摘要</div>
                 ${data.reasoning.slice(0, 4).map(r => `<div style="margin-bottom:4px;">· ${escapeHtml(String(r))}</div>`).join('')}
             </div>`;
         }
@@ -724,10 +1173,10 @@ async function sendRagMessage() {
                 rank_provinces: '排名计算',
                 query_point: '定点查询'
             };
-            html += `<div class="rag-method-card">
+            processHtml += `<div class="rag-method-card">
                 <div class="rag-method-title">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><use href="#ico-data"/></svg>
-                    方法轨迹
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><use href="#ico-db"/></svg>
+                    工具轨迹
                 </div>
                 ${data.toolTrace.slice(0, 3).map(trace => {
                     const toolName = trace.normalizedTool || trace.tool || trace.type || 'analysis';
@@ -746,14 +1195,29 @@ async function sendRagMessage() {
             </div>`;
         }
         
+        if (processHtml) {
+            html += `<details class="rag-process-details">
+                <summary>已完成思考过程</summary>
+                ${processHtml}
+            </details>`;
+        }
+        
         // 主回答
         html += `<div class="rag-answer-content">${formatAnswer(data.answer || '无回答')}</div>`;
+        if (hasPotentialMissingValueProcessingFromText(data.answer || '')) {
+            html += dataProcessingNoticeHtml();
+        }
         
         // 引用
         if (data.citations && data.citations.length > 0) {
+            const visibleCitations = data.citations.slice(0, 3);
+            const hiddenCitations = data.citations.slice(3);
             html += `<div class="rag-citations">
-                <div style="font-size:.73rem;color:var(--c-muted);margin-bottom:6px;display:flex;align-items:center;gap:5px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-src"/></svg>数据来源：</div>
-                ${data.citations.map(c => `<span class="rag-citation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><use href="#ico-src"/></svg>${escapeHtml(c)}</span>`).join('')}
+                <div class="rag-citation-head"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-src"/></svg>数据来源</div>
+                <div class="rag-citation-list">
+                    ${visibleCitations.map(c => `<span class="rag-citation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><use href="#ico-src"/></svg>${escapeHtml(c)}</span>`).join('')}
+                </div>
+                ${hiddenCitations.length ? `<details class="rag-more-citations"><summary>查看其余 ${hiddenCitations.length} 条来源</summary><div class="rag-citation-list">${hiddenCitations.map(c => `<span class="rag-citation">${escapeHtml(c)}</span>`).join('')}</div></details>` : ''}
             </div>`;
         }
         if (data.suggestions && data.suggestions.length) {
@@ -764,11 +1228,10 @@ async function sendRagMessage() {
         assistantBubble.classList.remove('streaming-cursor');
         
         // 图表：直接渲染在当前气泡内（内联显示，html设置后再渲染）
-        if (data.chart && data.chart.metric) {
-            setTimeout(() => renderAgentChart(data.chart, assistantBubble), 80);
-        }
+        // Chart actions are now shown as chat-bubble buttons; no auto modal trigger.
         
         // 保存到当前 session
+        setTimeout(() => executeAgentUiActions(data, question, assistantBubble), 180);
         const session = getCurrentSession();
         if (session) {
             // Auto-title from first message
@@ -794,6 +1257,7 @@ async function sendRagMessage() {
         </div>`;
         assistantBubble.classList.remove('streaming-cursor');
     } finally {
+        clearInterval(liveProgressTimer);
         isRagStreaming = false;
         if (sendBtn) sendBtn.disabled = false;
     }
@@ -809,6 +1273,184 @@ document.addEventListener('click', function(e) {
     const config = window._chartConfigs && window._chartConfigs[chartId];
     if (config) renderAgentChart(config);
 });
+
+function normalizeAgentText(value) {
+    return String(value || '').replace(/[（(].*?[）)]/g, '').replace(/\s+/g, '').toLowerCase();
+}
+
+function agentFindWorkbookSheet(name) {
+    const keys = Object.keys(window.workbook || {});
+    if (!keys.length) return name;
+    if (keys.includes(name)) return name;
+    const compact = normalizeAgentText(name);
+    return keys.find(k => normalizeAgentText(k) === compact || normalizeAgentText(k).includes(compact) || compact.includes(normalizeAgentText(k))) || name;
+}
+
+function agentInferSheet(data, question) {
+    const q = String(question || '');
+    const chart = data?.chart || {};
+    const trace = Array.isArray(data?.toolTrace) ? data.toolTrace.find(t => t?.params) : null;
+    const table = chart.table || trace?.params?.table || data?.methodSummary?.table || '';
+    const region = chart.regions?.[0] || trace?.params?.region || data?.methodSummary?.region || '';
+    if (/地级市|城市|市级/.test(q) || /地级市|城市/.test(table)) return agentFindWorkbookSheet('地级市');
+    if (/全国表/.test(table) || region === '全国' || /全国/.test(q)) return agentFindWorkbookSheet('全国');
+    if (/省份表|省份|省域|各省/.test(table + q) || /省|自治区|直辖市|广东|山东|江苏|浙江|山西/.test(region + q)) return agentFindWorkbookSheet('省份');
+    return agentFindWorkbookSheet(currentSheet || '全国');
+}
+
+function agentFindMetricIndex(metric, list) {
+    const wanted = normalizeAgentText(metric);
+    if (!wanted || !Array.isArray(list)) return -1;
+    let idx = list.findIndex(m => normalizeAgentText(m) === wanted);
+    if (idx >= 0) return idx;
+    idx = list.findIndex(m => normalizeAgentText(m).includes(wanted) || wanted.includes(normalizeAgentText(m)));
+    if (idx >= 0) return idx;
+    return list.findIndex(m => normalizeAgentText(cleanMetricName(m)).includes(wanted) || wanted.includes(normalizeAgentText(cleanMetricName(m))));
+}
+
+function agentSelectMainMetric(metric) {
+    const idx = agentFindMetricIndex(metric, valueFields);
+    if (idx < 0) return false;
+    currentMetricIndex = idx;
+    const metricSel = document.getElementById('main-metric-select');
+    if (metricSel) metricSel.value = String(idx);
+    try { updateNationHighlight?.(); } catch(e) {}
+    try { renderIndicatorList?.(); } catch(e) {}
+    try { renderMainChart?.(); } catch(e) {}
+    return true;
+}
+
+function agentSelectAdvancedMetric(metric, year) {
+    const idx = agentFindMetricIndex(metric, advMetrics);
+    if (idx >= 0) {
+        advCurrentMetricIndex = idx;
+        const metricSel = document.getElementById('adv-metric-select');
+        if (metricSel) metricSel.value = String(idx);
+    }
+    if (year && advYears?.includes?.(Number(year))) {
+        advCurrentYear = Number(year);
+        const yearSel = document.getElementById('adv-year-select');
+        if (yearSel) yearSel.value = String(year);
+    }
+    try { renderAdvancedChart?.(); } catch(e) {}
+}
+
+function agentDownload(filename, mime, content) {
+    const blob = new Blob([content], { type: mime });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+function agentGenerateReportDeprecatedHtml(data, question) {
+    const now = new Date().toLocaleString();
+    const title = String(question || 'AI 数据分析报告').slice(0, 80);
+    const reasoning = (data.reasoning || []).map(x => `<li>${escapeHtml(String(x))}</li>`).join('');
+    const citations = (data.citations || []).map(x => `<li>${escapeHtml(String(x))}</li>`).join('');
+    const trace = (data.toolTrace || []).map(t => `<li>${escapeHtml(t.normalizedTool || t.tool || 'tool')}：${escapeHtml(JSON.stringify(t.params || {}))}</li>`).join('');
+    const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<style>body{font-family:"Microsoft YaHei",Arial,sans-serif;line-height:1.75;color:#172033;margin:42px;background:#f6f9fc}main{max-width:920px;margin:auto;background:white;border-radius:18px;padding:34px 42px;box-shadow:0 18px 55px rgba(30,60,100,.12)}h1{color:#0f4f97;margin-top:0}h2{margin-top:30px;color:#12345f}.meta{color:#667085}.answer{white-space:pre-wrap}li{margin:6px 0}</style></head><body><main>
+<h1>${escapeHtml(title)}</h1><div class="meta">生成时间：${escapeHtml(now)} · 来源：山东财经大学科研教育人才数据平台 Agent</div>
+<h2>分析结论</h2><div class="answer">${formatAnswer(data.answer || '')}</div>
+${reasoning ? `<h2>分析过程</h2><ul>${reasoning}</ul>` : ''}
+${trace ? `<h2>工具调用</h2><ul>${trace}</ul>` : ''}
+${citations ? `<h2>数据来源</h2><ul>${citations}</ul>` : ''}
+</main></body></html>`;
+    agentDownload(`agent_report_${Date.now()}.html`, 'text/html;charset=utf-8', html);
+    showToast?.('分析报告已生成并下载', 'success');
+}
+
+function agentQuestionIntent(question) {
+    const q = String(question || '');
+    return {
+        wantsReport: /报告|分析稿|总结文档|生成总结|生成分析/.test(q),
+        wantsExport: /导出|下载|保存|生成文件/.test(q),
+        wantsTable: /数据表|表格|明细|Excel|CSV/i.test(q),
+        wantsScatter: /散点|相关|关联/.test(q),
+        wantsRank: /排名|排行|前\d+|最高|最低/.test(q),
+        wantsChart: /图表|趋势图|柱状图|折线图|看板|切换|展示|查看/.test(q)
+    };
+}
+
+function agentFocusDashboard(tab) {
+    const rag = document.getElementById('rag-fullscreen');
+    const dp = document.getElementById('dashboard-page');
+    const dashboardVisible = dp && getComputedStyle(dp).display !== 'none';
+    if (rag && getComputedStyle(rag).display !== 'none') {
+        closeRagFullscreen();
+    } else if (!dashboardVisible) {
+        enterDashboard(tab);
+    }
+}
+
+function executeAgentUiActionsDeprecated(data, question, sourceBubble) {
+    const intent = agentQuestionIntent(question);
+    const hasChart = !!(data?.chart && data.chart.metric);
+    if (intent.wantsReport) agentGenerateReport(data, question);
+    if (!hasChart && !intent.wantsExport && !intent.wantsTable && !intent.wantsScatter && !intent.wantsRank && !intent.wantsChart) return;
+
+    const targetTab = intent.wantsScatter ? 'scatter' : intent.wantsTable ? 'table' : undefined;
+    agentFocusDashboard(targetTab);
+
+    setTimeout(() => {
+        const chart = data.chart || {};
+        const trace = Array.isArray(data.toolTrace) ? data.toolTrace.find(t => t?.params) : null;
+        const params = trace?.params || {};
+        const metric = chart.metric || params.metric || data.methodSummary?.metric || '';
+        const year = chart.years?.[0] || params.year || params.targetYear || data.methodSummary?.year;
+        const sheet = agentInferSheet(data, question);
+
+        if (sheet && currentSheet !== sheet && typeof requestSwitchSheet === 'function') {
+            requestSwitchSheet(sheet);
+        }
+
+        setTimeout(() => {
+            if (intent.wantsTable) {
+                if (typeof setTableSheet === 'function') setTableSheet(sheet || tableSheet || currentSheet, { independent: false });
+                document.getElementById('section-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } else if (intent.wantsScatter) {
+                const scatterSection = document.getElementById('section-scatter');
+                if (scatterSection) scatterSection.style.display = 'block';
+                scatterSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                if (typeof openAnalysisPanel === 'function') openAnalysisPanel('scatter');
+            } else if (intent.wantsRank || chart.type === 'bar') {
+                const advancedSection = document.getElementById('section-advanced');
+                if (advancedSection) advancedSection.style.display = 'block';
+                advancedSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                agentSelectAdvancedMetric(metric, year);
+            } else {
+                if (metric) agentSelectMainMetric(metric);
+                const chartType = document.getElementById('chart-type');
+                if (chartType && chart.type) chartType.value = chart.type === 'bar' ? 'bar' : chart.type === 'line' ? 'line' : chartType.value;
+                try { renderMainChart?.(); } catch(e) {}
+                document.getElementById('section-chart')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+
+            if (intent.wantsExport) {
+                setTimeout(() => {
+                    const q = String(question || '');
+                    if (/Excel|xlsx/i.test(q)) exportData?.('xlsx');
+                    else if (/CSV/i.test(q)) exportData?.('csv');
+                    else if (intent.wantsTable) exportData?.(/CSV/i.test(q) ? 'csv' : 'xlsx');
+                    else if (intent.wantsScatter) exportAnalysisChart?.(/jpg|jpeg/i.test(q) ? 'jpg' : 'png');
+                    else if (intent.wantsRank) exportChart?.(advancedChart, /jpg|jpeg/i.test(q) ? 'jpg' : 'png', 'agent_rank_chart');
+                    else exportChart?.(mainChart, /jpg|jpeg/i.test(q) ? 'jpg' : 'png', 'agent_main_chart');
+                }, 520);
+            }
+
+            if (sourceBubble && !sourceBubble.querySelector('.agent-ui-action-note')) {
+                const note = document.createElement('div');
+                note.className = 'agent-ui-action-note';
+                note.textContent = intent.wantsExport ? 'Agent 已执行页面切换并触发导出。' : 'Agent 已根据问题切换到对应数据视图。';
+                sourceBubble.appendChild(note);
+            }
+        }, 360);
+    }, 260);
+}
 
 function addRagMessage(role, content, isPlaceholder = false) {
     const container = document.getElementById('rag-messages');
@@ -983,7 +1625,6 @@ function _getOrCreateModal() {
           <div class="chart-modal-export-row">
             <button class="mini-btn" id="cme-png">PNG</button>
             <button class="mini-btn" id="cme-jpg">JPG</button>
-            <button class="mini-btn" id="cme-svg">SVG</button>
           </div>
         </div>
       </div>`;
@@ -998,15 +1639,33 @@ function _getOrCreateModal() {
     }
 
     // Export handlers
-    const exportChart = (type) => {
+    const exportModalChart = (type) => {
         if (!_chartModalInstance) return;
-        const echartsType = type === 'jpg' ? 'jpeg' : type;
-        const url = _chartModalInstance.getDataURL({ type: echartsType, pixelRatio: 2, backgroundColor: getComputedStyle(document.body).getPropertyValue('--c-card').trim() || '#ffffff' });
-        const a = document.createElement('a'); a.href = url; a.download = 'chart.' + type; a.click();
+        const isDark = document.body.classList.contains('dark-mode');
+        try {
+            if (type === 'svg') {
+                const svgStr = getChartSVGString(_chartModalInstance);
+                if (!svgStr) { showToast('SVG 导出失败', 'error'); return; }
+                const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+                const blobUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = blobUrl; a.download = 'chart.svg';
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+                return;
+            }
+            const url = _chartModalInstance.getDataURL({
+                type: type === 'jpg' ? 'jpeg' : 'png',
+                pixelRatio: 2,
+                backgroundColor: isDark ? '#ffffff' : '#ffffff'
+            });
+            const a = document.createElement('a'); a.href = url; a.download = 'chart.' + type; a.click();
+        } catch(e) {
+            console.error(e);
+            showToast('图表导出失败', 'error');
+        }
     };
-    document.getElementById('cme-png').onclick = () => exportChart('png');
-    document.getElementById('cme-jpg').onclick = () => exportChart('jpg');
-    document.getElementById('cme-svg').onclick = () => exportChart('svg');
+    document.getElementById('cme-png').onclick = () => exportModalChart('png');
+    document.getElementById('cme-jpg').onclick = () => exportModalChart('jpg');
 }
 
 function openChartModal(config) {
@@ -1166,7 +1825,7 @@ function _doRenderInlineChart(chartId, config, isModal) {
     if (!years.length) {
         const baseRows = useNational ? nationalRows : (regions.length ? provinceRows.filter(r => regions.includes(r['地区'])) : provinceRows);
         years = [...new Set(baseRows.map(r => r['年份']))].sort();
-        if (years.length > 10) years = years.slice(-10); // cap at 10 years
+        if (years.length > 20) years = years.slice(-20); // cap at 20 years for very long ranges
     }
     
     const series = [];
@@ -1200,9 +1859,57 @@ function _doRenderInlineChart(chartId, config, isModal) {
         });
     }
     
-    const textColor = isDark ? '#8fa6c8' : '#4a5568';
+    const textColor = isDark ? '#dbeafe' : '#263b59';
     const gridColor = isDark ? '#2a3a58' : '#e8edf5';
     const titleColor = isDark ? '#edf2ff' : '#1a202c';
+
+    if (chartType === 'bar' && regions.length > 3 && years.length === 1 && !useNational) {
+        const year = years[0];
+        const barRows = regions.map(region => {
+            const row = provinceRows.find(r => r['地区'] === region && r['年份'] === year);
+            return { region, value: row ? (row[realMetric] ?? null) : null };
+        }).filter(item => typeof item.value === 'number');
+
+        chart.setOption({
+            backgroundColor: 'transparent',
+            title: { text: config.title || `${year}年 ${metric} 排名`, left: 'center', top: 8, textStyle: { color: titleColor, fontSize: 14, fontWeight: 800 } },
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                backgroundColor: isDark ? 'rgba(19,25,41,.96)' : 'rgba(255,255,255,.98)',
+                borderColor: '#93c5fd',
+                textStyle: { color: isDark ? '#edf2ff' : '#1a202c', fontSize: 12 },
+                extraCssText: 'box-shadow:0 8px 24px rgba(37,99,235,.16);border-radius:10px;'
+            },
+            grid: { left: 58, right: 26, top: 58, bottom: 72, containLabel: true },
+            dataZoom: [{ type: 'inside', start: 0, end: Math.min(100, Math.max(35, 10 / Math.max(1, barRows.length) * 100)) }],
+            xAxis: {
+                type: 'category',
+                data: barRows.map(item => item.region),
+                axisLine: { lineStyle: { color: gridColor } },
+                axisLabel: { color: textColor, fontSize: 10, interval: 0, rotate: 35 },
+                splitLine: { show: false }
+            },
+            yAxis: {
+                type: 'value',
+                axisLine: { show: false },
+                axisLabel: { color: textColor, fontSize: 11 },
+                splitLine: { lineStyle: { color: gridColor, type: 'dashed' } }
+            },
+            series: [{
+                name: cleanMetricName(realMetric),
+                type: 'bar',
+                data: barRows.map(item => item.value),
+                barMaxWidth: 18,
+                itemStyle: { color: '#2563eb', borderRadius: [5, 5, 0, 0] }
+            }]
+        });
+
+        const resizeFn = () => chart.resize();
+        window.addEventListener('resize', resizeFn);
+        chart._resizeFn = resizeFn;
+        return;
+    }
     
     chart.setOption({
         backgroundColor: 'transparent',
@@ -1301,6 +2008,7 @@ async function sendMessage() {
         } else if (/趋势|分析|变化|走势/.test(question)) {
             autoGenerateChart(question);
         }
+        setTimeout(() => executeAgentUiActions(data, question, null), 180);
 
     } catch (err) {
         if (err.name === 'AbortError') {
@@ -1324,55 +2032,133 @@ function stopGeneration() {
 
 function formatAnswer(text) {
     if (!text) return '';
-    
-    // Remove bold markers but keep structure
-    let cleaned = text.replace(/\*\*/g, '');
-    
-    // ---- Markdown table → HTML table (robust, handles multiple tables) ----
-    if (cleaned.includes('|')) {
-        cleaned = cleaned.replace(/((?:\|[^\n]+\n?)+)/g, (tableBlock) => {
-            const lines = tableBlock.trim().split('\n').filter(l => l.trim());
-            if (lines.length < 2) return tableBlock;
-            // Filter out separator rows (|---|---|)
-            const dataLines = lines.filter(l => !l.replace(/[|\- ]/g, '').trim() === '');
-            const nonSep = lines.filter(l => !/^\s*\|[-|\s]+\|\s*$/.test(l));
-            if (!nonSep.length) return tableBlock;
-            
-            let tableHtml = '<table class="rag-table" style="border-collapse:collapse;width:100%;margin:12px 0;">';
-            nonSep.forEach((line, i) => {
-                const cells = line.split('|').map(c => c.trim()).filter((c, idx, arr) => idx > 0 && idx < arr.length - 1 || (idx === 0 && c !== '') || (idx === arr.length -1 && c !== ''));
-                // re-split properly
-                const parts = line.split('|').slice(1, -1).map(c => c.trim());
-                if (!parts.length) return;
-                const tag = i === 0 ? 'th' : 'td';
-                const style = tag === 'th'
-                    ? 'padding:8px 12px;border:1px solid var(--border-color);background:var(--bg-hover);font-weight:600;text-align:left;'
-                    : 'padding:8px 12px;border:1px solid var(--border-color);';
-                tableHtml += '<tr>' + parts.map(c => `<${tag} style="${style}">${escapeHtml(c)}</${tag}>`).join('') + '</tr>';
-            });
-            tableHtml += '</table>';
-            return tableHtml;
+    let t = escapeHtml(text);
+
+    // 1. 去除 think 标签
+    t = t.replace(/&lt;think&gt;[\s\S]*?&lt;\/think&gt;/gi, '');
+
+    // 2. Markdown 表格 → HTML table（表格内容安全转义）
+    t = t.replace(/((?:\|[^\n]+\|\s*\n?)+)/g, (block) => {
+        const lines = block.trim().split('\n').filter(l => l.trim());
+        if (lines.length < 2) return block;
+        const nonSep = lines.filter(l => !/^\s*\|[\s\-:|]+\|\s*$/.test(l));
+        if (!nonSep.length) return block;
+        let html = '<table class="rag-table">';
+        nonSep.forEach((line, i) => {
+            const parts = line.split('|').slice(1, -1).map(c => c.trim());
+            if (!parts.length) return;
+            const tag = i === 0 ? 'th' : 'td';
+            html += '<tr>' + parts.map(c => `<${tag}>${c}</${tag}>`).join('') + '</tr>';
         });
-    }
-    
-    // Bold text back (using strong tags)
-    // Convert remaining markdown: **text** → <strong>text</strong>
-    cleaned = cleaned
-        .replace(/【思考】/g, '<div class="thinking-title">🤔 思考过程</div>')
-        .replace(/【回答】/g, '<div class="answer-title">📢 最终回答</div>');
-    
-    // Convert newlines to <br> but don't break table HTML
-    let html = cleaned.replace(/\n(?!<\/?(table|tr|th|td))/g, '<br>');
-    
-    return html;
+        return html + '</table>';
+    });
+
+    // 3. 标题 ### ## # → <h3> <h2> <h1>
+    t = t.replace(/^### (.+)$/gm, '<h3 class="md-h3">$1</h3>');
+    t = t.replace(/^## (.+)$/gm,  '<h2 class="md-h2">$1</h2>');
+    t = t.replace(/^# (.+)$/gm,   '<h1 class="md-h1">$1</h1>');
+
+    // 4. 加粗 **text** → <strong>（API 有时返回 HTML 有时返回 markdown，两种都处理）
+    t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+    // 5. 分隔线 --- → <hr>
+    t = t.replace(/^\s*[-]{3,}\s*$/gm, '<hr class="md-hr">');
+
+    // 6. 无序列表（支持 - 和 * 开头）
+    t = t.replace(/((?:^[\*\-•] .+\n?)+)/gm, (block) => {
+        const items = block.trim().split('\n')
+            .map(l => l.replace(/^[\*\-•] /, '').trim())
+            .filter(Boolean)
+            .map(l => `<li>${l}</li>`)
+            .join('');
+        return `<ul class="md-ul">${items}</ul>`;
+    });
+
+    // 7. 有序列表
+    t = t.replace(/((?:^\d+\. .+\n?)+)/gm, (block) => {
+        const items = block.trim().split('\n')
+            .map(l => l.replace(/^\d+\. /, '').trim())
+            .filter(Boolean)
+            .map(l => `<li>${l}</li>`)
+            .join('');
+        return `<ol class="md-ol">${items}</ol>`;
+    });
+
+    // 8. 引用块
+    t = t.replace(/^> (.+)$/gm, '<blockquote class="md-quote">$1</blockquote>');
+
+    // 9. 特殊标记
+    t = t.replace(/【思考】/g, '<div class="thinking-title">🤔 思考过程</div>');
+    t = t.replace(/【回答】/g, '<div class="answer-title">📢 最终回答</div>');
+
+    // 10. 换行处理（跳过块级 HTML 标签前后）
+    t = t.replace(/\n(?!<)/g, '<br>');
+    t = t.replace(/<br>(<\/?(?:table|tr|th|td|ul|ol|li|h[1-6]|hr|blockquote))/g, '$1');
+    t = t.replace(/(<\/(?:table|ul|ol|h[1-6]|blockquote)>)<br>/g, '$1');
+
+    return t;
 }
 
 async function clearConversation() {
+    // Clear current RAG session (new multi-session system)
+    if (currentSessionId) {
+        try {
+            await fetch('/api/clear_history', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId: currentSessionId })
+            });
+        } catch(err) {
+            console.warn('清空服务端历史失败(非致命):', err);
+        }
+        // Clear current session messages in memory
+        const session = getCurrentSession();
+        if (session) {
+            session.messages = [];
+            saveSessions();
+        }
+        // Reset the chat UI to welcome screen
+        const container = document.getElementById('rag-messages');
+        if (container) {
+            container.innerHTML = `<div class="rag-welcome">
+                <div class="rag-welcome-avatar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg>
+                </div>
+                <h2>我是你的数据分析助手</h2>
+                <p>查询数据 · 分析趋势 · 对比地区 · 预测未来<br>所有回答均基于平台数据，附带来源溯源。</p>
+                <div class="rag-welcome-hints">
+                    <button class="rag-hint-btn" onclick="sendRagQuick('近5年工业机器人密度趋势')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-trend"/></svg>
+                        近5年工业机器人密度趋势
+                    </button>
+                    <button class="rag-hint-btn" onclick="sendRagQuick('2023年各省科学支出前10排名')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
+                        2023年各省科学支出排名
+                    </button>
+                    <button class="rag-hint-btn" onclick="sendRagQuick('预测2026年全国普通高校数量')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>
+                        预测2026年高校数量
+                    </button>
+                    <button class="rag-hint-btn" onclick="sendRagQuick('江苏和浙江R&D投入强度对比')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-scatter"/></svg>
+                        江苏vs浙江R&D投入对比
+                    </button>
+                </div>
+            </div>`;
+        }
+        // Update hint bar
+        const hint = document.getElementById('rag-context-hint');
+        if (hint) hint.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg><span>支持上下文追问 · 无地区时默认全国数据</span>';
+        renderSessionList();
+        showToast('对话已清空', 'success', 2000);
+        return;
+    }
+    // Legacy chat fallback
     try {
         const response = await fetch('/api/clear_history', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionId: currentSessionId || 'legacy_chat' })
+            body: JSON.stringify({ sessionId: 'legacy_chat' })
         });
         if (response.ok) {
             if (chatMessages) chatMessages.innerHTML = '';
@@ -1460,6 +2246,8 @@ const INACTIVITY_DELAY = 3000;
 let mainChart, pieChart, advancedChart;
 let currentSheet = "全国";
 let originalRows = [], headers = [];
+let tableSheet = "全国";
+let tableRows = [], tableHeaders = [];
 let dimType = "nation";
 let valueFields = [];
 let currentMetricIndex = 0;
@@ -1504,9 +2292,11 @@ let advCurrentYear = null;
 let rankFullData = [];
 let rankSelectedIndices = new Set();
 let rankChart = null;
+let scatterTableMode = 'province';
 
 let allRegionList = [];
 let regionSearchKeyword = "";
+let rankRegionSearchTerm = "";
 
 // ======================= 初始化 =======================
 
@@ -1584,6 +2374,7 @@ async function init() {
 function initDarkMode() {
     const darkModeToggle = document.getElementById('darkModeToggle');
     const landingToggle = document.getElementById('darkModeToggleLanding');
+    const coverToggle = document.getElementById('darkModeToggleCover');
     const isDarkMode = localStorage.getItem('darkMode') === 'true';
     
     const applyDark = (dark) => {
@@ -1597,6 +2388,14 @@ function initDarkMode() {
     if (landingToggle && !landingToggle._dmBound) {
         landingToggle._dmBound = true;
         landingToggle.addEventListener('click', () => {
+            const isNowDark = !document.body.classList.contains('dark-mode');
+            localStorage.setItem('darkMode', isNowDark);
+            applyDark(isNowDark);
+        });
+    }
+    if (coverToggle && !coverToggle._dmBound) {
+        coverToggle._dmBound = true;
+        coverToggle.addEventListener('click', () => {
             const isNowDark = !document.body.classList.contains('dark-mode');
             localStorage.setItem('darkMode', isNowDark);
             applyDark(isNowDark);
@@ -1625,7 +2424,7 @@ function initDarkMode() {
 }
 
 function updateChartsTheme(isDark) {
-    const textColor = isDark ? '#8fa6c8' : '#4a5568';
+    const textColor = isDark ? '#dbeafe' : '#263b59';
     const axisColor = isDark ? '#2a3a58' : '#dde3ef';
     const splitColor = isDark ? '#2a3a58' : '#eef1f7';
     const tooltipBg = isDark ? 'rgba(19,25,41,.96)' : 'rgba(255,255,255,.97)';
@@ -1747,7 +2546,7 @@ function initColumnSelector() {
     
     document.getElementById("col-select-all")?.addEventListener("click", () => {
         visibleColumns.clear();
-        headers.forEach(h => visibleColumns.add(h));
+        tableHeaders.forEach(h => visibleColumns.add(h));
         refreshColumnCheckboxList();
         renderTablePage();
     });
@@ -1760,7 +2559,7 @@ function initColumnSelector() {
     
     document.getElementById("col-reset")?.addEventListener("click", () => {
         visibleColumns.clear();
-        headers.forEach(h => visibleColumns.add(h));
+        tableHeaders.forEach(h => visibleColumns.add(h));
         refreshColumnCheckboxList();
         renderTablePage();
     });
@@ -1770,7 +2569,7 @@ function refreshColumnCheckboxList() {
     const container = document.getElementById("column-checkbox-list");
     if (!container) return;
     container.innerHTML = "";
-    headers.forEach(h => {
+    tableHeaders.forEach(h => {
         const label = document.createElement("label");
         const cb = document.createElement("input");
         cb.type = "checkbox";
@@ -1789,19 +2588,20 @@ function refreshColumnCheckboxList() {
 // ======================= 工作表切换 =======================
 
 function buildSheetSelect() {
-    const selects = [document.getElementById("sheet-list"), document.getElementById("sheet-list-table")].filter(Boolean);
-    if (!selects.length) return;
-    selects.forEach(sel => {
+    const mainSelect = document.getElementById("sheet-list");
+    const tableSelect = document.getElementById("sheet-list-table");
+    [mainSelect, tableSelect].filter(Boolean).forEach(sel => {
         sel.innerHTML = "";
         window.sheetList?.forEach(s => {
             const opt = document.createElement("option");
             opt.value = s;
             opt.textContent = s;
-            if (s === currentSheet) opt.selected = true;
+            if (s === (sel === tableSelect ? tableSheet : currentSheet)) opt.selected = true;
             sel.appendChild(opt);
         });
-        sel.onchange = (e) => requestSwitchSheet(e.target.value);
     });
+    if (mainSelect) mainSelect.onchange = (e) => requestSwitchSheet(e.target.value);
+    if (tableSelect) tableSelect.onchange = (e) => setTableSheet(e.target.value, { independent: true });
 }
 
 function initPageEnhancements() {
@@ -1812,7 +2612,7 @@ function initPageEnhancements() {
     window.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
 
-    const targets = document.querySelectorAll('.kpi-card,.dash-card,.cap-card,.c3d-item,.analysis-card-entry');
+    const targets = document.querySelectorAll('.kpi-card,.dash-card,.cap-card,.analysis-card-entry');
     targets.forEach(el => el.classList.add('reveal-on-scroll'));
     if ('IntersectionObserver' in window) {
         const io = new IntersectionObserver(entries => {
@@ -1830,20 +2630,65 @@ function initPageEnhancements() {
 }
 
 function syncSheetSelects(sheetName = currentSheet) {
-    [document.getElementById("sheet-list"), document.getElementById("sheet-list-table")]
-        .filter(Boolean)
-        .forEach(sel => { sel.value = sheetName; });
+    const main = document.getElementById("sheet-list");
+    const table = document.getElementById("sheet-list-table");
+    if (main) main.value = sheetName;
+    if (table) table.value = tableSheet || sheetName;
 }
 
 function requestSwitchSheet(sheetName) {
+    currentSheet = sheetName;
+    tableSheet = sheetName;
     syncSheetSelects(sheetName);
-    document.body.classList.add('sheet-switching');
     if (pendingSheetSwitchTimer) clearTimeout(pendingSheetSwitchTimer);
-    pendingSheetSwitchTimer = setTimeout(() => {
-        pendingSheetSwitchTimer = null;
-        switchSheet(sheetName);
-        requestAnimationFrame(() => document.body.classList.remove('sheet-switching'));
-    }, 24);
+    pendingSheetSwitchTimer = null;
+    document.body.classList.remove('sheet-switching');
+    hideSheetSwitchOverlay();
+    switchSheet(sheetName);
+    requestAnimationFrame(() => forceResizeAllCharts());
+}
+
+function showSheetSwitchOverlay(sheetName) {
+    let overlay = document.getElementById('sheet-switch-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'sheet-switch-overlay';
+        overlay.innerHTML = `
+            <div class="sso-card">
+                <div class="sso-spinner"></div>
+                <div class="sso-text">正在切换到 <strong id="sso-name">—</strong></div>
+                <div class="sso-sub">重建图表与指标面板…</div>
+            </div>`;
+        document.body.appendChild(overlay);
+    }
+    const nameEl = document.getElementById('sso-name');
+    if (nameEl) nameEl.textContent = sheetName || '数据表';
+    requestAnimationFrame(() => overlay.classList.add('show'));
+}
+
+function hideSheetSwitchOverlay() {
+    const overlay = document.getElementById('sheet-switch-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('show');
+}
+
+function setTableSheet(sheetName, options = {}) {
+    tableSheet = sheetName || currentSheet;
+    tableRows = window.workbook?.[tableSheet]?.map(row => ({ ...row })) || [];
+    tableHeaders = Object.keys(tableRows[0] || {});
+    visibleColumns.clear();
+    tableHeaders.forEach(h => visibleColumns.add(h));
+    sortKey = "";
+    sortType = "asc";
+    currentPage = 1;
+    const tableSelect = document.getElementById("sheet-list-table");
+    if (tableSelect) tableSelect.value = tableSheet;
+    const tableSearch = document.getElementById("search-input");
+    if (tableSearch && options.independent) tableSearch.value = "";
+    refreshColumnCheckboxList();
+    applyFilterAndSort();
+    renderTablePage();
+    if (options.independent) showToast(`明细表已切换到：${tableSheet}`, 'success', 1600);
 }
 
 function switchSheet(sheetName) {
@@ -1853,10 +2698,7 @@ function switchSheet(sheetName) {
     headers = Object.keys(originalRows[0] || {});
     
     log("切换到工作表:", sheetName, headers);
-    
-    visibleColumns.clear();
-    headers.forEach(h => visibleColumns.add(h));
-    refreshColumnCheckboxList();
+    setTableSheet(sheetName);
     
     const pageSizeSelect = document.getElementById("page-size-select");
     if (pageSizeSelect) pageSize = parseInt(pageSizeSelect.value) || 20;
@@ -1864,21 +2706,36 @@ function switchSheet(sheetName) {
     const searchContainer = document.getElementById("region-search-container");
     const metricContainer = document.getElementById('metric-selector-container');
     const quickJumpContainer = document.getElementById('quick-jump-container');
+    const setPanelVisible = (el, visible, display = 'block') => {
+        if (!el) return;
+        el.hidden = !visible;
+        el.style.display = visible ? display : 'none';
+    };
 
     if (sheetName === "全国") {
         dimType = "nation";
+        scatterTableMode = 'province';
         valueFields = headers.filter(h => h !== "年份");
         currentMetricIndex = 0;
         selectedGroups = [];
+        regionSearchKeyword = "";
+        const regionSearch = document.getElementById("region-search");
+        if (regionSearch) regionSearch.value = "";
+        const quickJump = document.getElementById("quick-jump-region");
+        if (quickJump) quickJump.value = "";
         buildNationPanel();
         document.querySelector(".pie-card") && (document.querySelector(".pie-card").style.display = "block");
         document.querySelector(".advanced-card") && (document.querySelector(".advanced-card").style.display = "none");
         initPieChart();
-        if (searchContainer) searchContainer.style.display = "none";
-        if (metricContainer) metricContainer.style.display = 'none';
-        if (quickJumpContainer) quickJumpContainer.style.display = 'none';
+        setPanelVisible(searchContainer, false, 'flex');
+        setPanelVisible(metricContainer, false);
+        setPanelVisible(quickJumpContainer, false);
+        // National data is single-metric per chart; hide bulk-select buttons that don't apply
+        const groupActions = document.getElementById('group-actions');
+        if (groupActions) groupActions.style.display = 'none';
     } else if (sheetName === "地级市") {
         dimType = "city";
+        scatterTableMode = 'city';
         groupField = "地区";
         const firstRow = originalRows[0];
         valueFields = Object.keys(firstRow).filter(key => key !== "年份" && key !== "地区" && key !== "时间地区");
@@ -1889,11 +2746,14 @@ function switchSheet(sheetName) {
         document.querySelector(".advanced-card") && (document.querySelector(".advanced-card").style.display = "block");
         buildMetricSelector();
         initAdvancedAnalysis();
-        if (searchContainer) searchContainer.style.display = "flex";
-        if (metricContainer) metricContainer.style.display = 'block';
-        if (quickJumpContainer) quickJumpContainer.style.display = 'block';
+        setPanelVisible(searchContainer, true, 'flex');
+        setPanelVisible(metricContainer, true);
+        setPanelVisible(quickJumpContainer, true);
+        const groupActions = document.getElementById('group-actions');
+        if (groupActions) groupActions.style.display = '';
     } else if (sheetName === "省份") {
         dimType = "province";
+        scatterTableMode = 'province';
         groupField = "地区";
         const firstRow = originalRows[0];
         valueFields = Object.keys(firstRow).filter(key => key !== "年份" && key !== "地区");
@@ -1904,9 +2764,11 @@ function switchSheet(sheetName) {
         document.querySelector(".advanced-card") && (document.querySelector(".advanced-card").style.display = "block");
         buildMetricSelector();
         initAdvancedAnalysis();
-        if (searchContainer) searchContainer.style.display = "flex";
-        if (metricContainer) metricContainer.style.display = 'block';
-        if (quickJumpContainer) quickJumpContainer.style.display = 'block';
+        setPanelVisible(searchContainer, true, 'flex');
+        setPanelVisible(metricContainer, true);
+        setPanelVisible(quickJumpContainer, true);
+        const groupActions = document.getElementById('group-actions');
+        if (groupActions) groupActions.style.display = '';
     }
 
     sortKey = "";
@@ -1914,11 +2776,13 @@ function switchSheet(sheetName) {
     const tableSearch = document.getElementById("search-input");
     if (tableSearch) tableSearch.value = "";
     regionSearchKeyword = "";
+    rankRegionSearchTerm = "";
     const sortStatus = document.getElementById("sort-status");
     if (sortStatus) sortStatus.innerHTML = "排序：无（点击表头排序）";
     
     currentPage = 1;
     applyFilterAndSort();
+    ensureDashboardAnalysisVisible();
     renderTablePage();
     stopCarousel();
     startCarousel();
@@ -2146,22 +3010,22 @@ function renderMainChart() {
             legend: { 
                 data: [metric], 
                 top: 30,
-                textStyle: { color: isDark ? '#a0aec0' : '#5a6e8a' }
+                textStyle: { color: isDark ? '#dbeafe' : '#263b59' }
             },
             xAxis: { 
                 type: "category", 
                 data: years, 
                 name: custom.xName !== "auto" ? custom.xName : "年份",
-                axisLine: { lineStyle: { color: isDark ? '#4a5568' : '#dce5ef' } },
-                axisLabel: { color: isDark ? '#a0aec0' : '#5a6e8a' }
+                axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
+                axisLabel: { color: isDark ? '#dbeafe' : '#263b59' }
             },
             yAxis: { 
                 name: custom.yName !== "auto" ? custom.yName : metric, 
                 min: 0, 
                 max: custom.yMax !== "auto" ? Number(custom.yMax) : null,
-                axisLine: { lineStyle: { color: isDark ? '#4a5568' : '#dce5ef' } },
-                axisLabel: { color: isDark ? '#a0aec0' : '#5a6e8a' },
-                splitLine: { lineStyle: { color: isDark ? '#2d3748' : '#f0f2f6', type: 'dashed' } }
+                axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
+                axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
+                splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
             },
             series: [{ 
                 name: metric, 
@@ -2215,22 +3079,22 @@ function renderMainChart() {
             data: selectedGroups, 
             top: 30, 
             type: "scroll",
-            textStyle: { color: isDark ? '#a0aec0' : '#5a6e8a' }
+            textStyle: { color: isDark ? '#dbeafe' : '#263b59' }
         },
         xAxis: { 
             type: "category", 
             data: years, 
             name: "年份",
-            axisLine: { lineStyle: { color: isDark ? '#4a5568' : '#dce5ef' } },
-            axisLabel: { color: isDark ? '#a0aec0' : '#5a6e8a' }
+            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
+            axisLabel: { color: isDark ? '#dbeafe' : '#263b59' }
         },
         yAxis: { 
             name: custom.yName !== "auto" ? custom.yName : metric, 
             min: 0, 
             max: custom.yMax !== "auto" ? Number(custom.yMax) : null,
-            axisLine: { lineStyle: { color: isDark ? '#4a5568' : '#dce5ef' } },
-            axisLabel: { color: isDark ? '#a0aec0' : '#5a6e8a' },
-            splitLine: { lineStyle: { color: isDark ? '#2d3748' : '#f0f2f6', type: 'dashed' } }
+            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
+            axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
+            splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
         },
         series: series
     }, true);
@@ -2300,7 +3164,9 @@ function initPieChart() {
                     pieSelectedProvinces.delete(prov);
                     pieHiddenProvinces.add(prov);
                 }
+                div.classList.toggle("active", e.target.checked);
                 renderPieChart();
+                stopPieCarousel();
             };
             const label = document.createElement("span");
             label.innerText = prov;
@@ -2309,6 +3175,37 @@ function initPieChart() {
             listContainer.appendChild(div);
         });
     }
+
+    const syncPieProvinceCheckboxes = () => {
+        document.querySelectorAll("#pie-province-list .indicator-item").forEach(item => {
+            const name = item.querySelector("span")?.innerText;
+            const checkbox = item.querySelector("input[type=checkbox]");
+            const checked = pieSelectedProvinces.has(name);
+            if (checkbox) checkbox.checked = checked;
+            item.classList.toggle("active", checked);
+        });
+    };
+    const applyPieProvinceSelection = (nextSelected) => {
+        pieSelectedProvinces = new Set(nextSelected);
+        pieHiddenProvinces = new Set(pieProvinceList.filter(p => !pieSelectedProvinces.has(p)));
+        syncPieProvinceCheckboxes();
+        renderPieChart();
+        stopPieCarousel();
+    };
+    const selectAllBtn = document.getElementById("pie-select-all");
+    const invertBtn = document.getElementById("pie-invert-select");
+    const resetBtn = document.getElementById("pie-reset-select");
+    const clearBtn = document.getElementById("pie-clear-select");
+    const resetHiddenBtn = document.getElementById("pie-reset-hidden");
+    if (selectAllBtn) selectAllBtn.onclick = () => applyPieProvinceSelection(pieProvinceList);
+    if (invertBtn) invertBtn.onclick = () => {
+        const inverted = pieProvinceList.filter(p => !pieSelectedProvinces.has(p));
+        applyPieProvinceSelection(inverted);
+    };
+    if (resetBtn) resetBtn.onclick = () => applyPieProvinceSelection(pieProvinceList);
+    if (clearBtn) clearBtn.onclick = () => applyPieProvinceSelection([]);
+    if (resetHiddenBtn) resetHiddenBtn.onclick = () => applyPieProvinceSelection(pieProvinceList);
+    syncPieProvinceCheckboxes();
     
     const sample = provinceRows[0];
     pieAvailableMetrics = Object.keys(sample).filter(k => k !== "年份" && k !== "地区" && typeof sample[k] === "number");
@@ -2466,6 +3363,7 @@ function renderPieChart() {
     
     let pieSeriesData = [];
     const colorPalette = [...COLORS];
+    const isDark = document.body.classList.contains('dark-mode');
     
     normalData.forEach((item, idx) => {
         let percent = (item.value / total) * 100;
@@ -2486,7 +3384,7 @@ function renderPieChart() {
                 name: `已隐藏省份 (${hiddenNames.length}省)`,
                 value: hiddenPercent,
                 originalVal: hiddenSum,
-                itemStyle: { color: '#718096' }
+                itemStyle: { color: isDark ? '#94a3b8' : '#718096' }
             });
         }
     }
@@ -2497,7 +3395,7 @@ function renderPieChart() {
             name: "其他（非省份部分）",
             value: otherPercent,
             originalVal: otherValue,
-            itemStyle: { color: '#4a5568' }
+            itemStyle: { color: isDark ? '#c7d2fe' : '#64748b' }
         });
     }
     
@@ -2508,11 +3406,10 @@ function renderPieChart() {
             name: `数据缺失省份 (${neverExist.length}省)`,
             value: 0,
             originalVal: 0,
-            itemStyle: { color: '#2d3748' }
+            itemStyle: { color: isDark ? '#475569' : '#cbd5e0' }
         });
     }
     
-    const isDark = document.body.classList.contains('dark-mode');
     const totalNote = totalSource === "province_sum" ? `（基于${provinceRows.length}省数值总和${formatValue(total)}计算）` : "";
     const unit = getUnit(metric);
     
@@ -2550,7 +3447,7 @@ function renderPieChart() {
             orient: "vertical",
             left: "left",
             type: "scroll",
-            textStyle: { color: isDark ? '#a0aec0' : '#5a6e8a' },
+            textStyle: { color: isDark ? '#dbeafe' : '#263b59' },
             formatter: (name) => name.length > 20 ? name.slice(0, 18) + "..." : name
         },
         series: [{
@@ -2570,7 +3467,7 @@ function renderPieChart() {
                 position: "outside",
                 lineHeight: 16,
                 fontSize: 10,
-                color: isDark ? '#a0aec0' : '#5a6e8a',
+                color: isDark ? '#dbeafe' : '#263b59',
                 avoidLabelOverlap: true,
                 labelLine: {
                     show: true,
@@ -2627,11 +3524,17 @@ function renderRankUI() {
     const toolbar = document.getElementById("advanced-toolbar");
     if (!toolbar) return;
     toolbar.innerHTML = `
-        <div class="tool-item"><label>指标</label><select id="adv-metric-select"></select></div>
-        <div class="tool-item"><label>年份</label><select id="adv-year-select"></select></div>
-        <button id="adv-pause-carousel" class="btn-outline">⏸️ 暂停轮播</button>
-        <button id="adv-refresh" class="btn-sm">刷新</button>
-        <span class="help-icon" title="排名对比图：左侧勾选地区，右侧柱状图对比。">❓</span>
+        <div class="tool-pill"><label>指标</label><select id="adv-metric-select"></select></div>
+        <div class="tool-pill"><label>年份</label><select id="adv-year-select"></select></div>
+        <button id="adv-pause-carousel" class="action-btn ghost" type="button">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            暂停轮播
+        </button>
+        <button id="adv-refresh" class="action-btn" type="button">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><use href="#ico-refresh"/></svg>
+            刷新
+        </button>
+        <span class="help-dot" title="排名对比图：左侧勾选地区，右侧柱状图对比。">?</span>
     `;
     
     const metricSel = document.getElementById("adv-metric-select");
@@ -2693,7 +3596,13 @@ function stopAdvCarousel() {
 function toggleAdvCarousel() {
     advPaused = !advPaused;
     const btn = document.getElementById("adv-pause-carousel");
-    if (btn) btn.innerText = advPaused ? "▶️ 开始轮播" : "⏸️ 暂停轮播";
+    if (btn) {
+        if (advPaused) {
+            btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px"><polygon points="6 4 20 12 6 20 6 4"/></svg>开始轮播';
+        } else {
+            btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播';
+        }
+    }
     if (!advPaused) startAdvCarousel();
     else stopAdvCarousel();
 }
@@ -2758,8 +3667,30 @@ function renderRankCompareChart(metric, year) {
     
     const listPanel = document.getElementById("rank-list-panel");
     if (listPanel) {
-        listPanel.innerHTML = "";
-        regionData.forEach((item, idx) => {
+        listPanel.innerHTML = `
+            <div class="rank-region-search">
+                <input id="rank-region-search-input" type="text" placeholder="搜索地区" value="${escapeHtml(rankRegionSearchTerm)}">
+                <button id="rank-region-search-clear" class="mini-btn" type="button">清除</button>
+            </div>
+            <div class="rank-region-meta" id="rank-region-meta"></div>
+            <div class="rank-region-list" id="rank-region-list"></div>
+        `;
+        const listBody = document.getElementById("rank-region-list");
+        const meta = document.getElementById("rank-region-meta");
+        const renderFilteredRankList = () => {
+            if (!listBody) return;
+            const keyword = rankRegionSearchTerm.trim().toLowerCase();
+            const indexed = regionData.map((item, idx) => ({ item, idx }));
+            const filtered = keyword
+                ? indexed.filter(({ item }) => String(item.name || '').toLowerCase().includes(keyword))
+                : indexed;
+            if (meta) meta.textContent = keyword ? `显示 ${filtered.length} / ${regionData.length} 个地区` : `共 ${regionData.length} 个地区`;
+            listBody.innerHTML = "";
+            if (!filtered.length) {
+                listBody.innerHTML = '<div class="rank-empty">未找到匹配地区</div>';
+                return;
+            }
+            filtered.forEach(({ item, idx }) => {
             const div = document.createElement("div");
             div.className = "rank-list-item";
             const cb = document.createElement("input");
@@ -2784,8 +3715,25 @@ function renderRankCompareChart(metric, year) {
             div.appendChild(rankSpan);
             div.appendChild(nameSpan);
             div.appendChild(valueSpan);
-            listPanel.appendChild(div);
-        });
+                listBody.appendChild(div);
+            });
+        };
+        const search = document.getElementById("rank-region-search-input");
+        const clear = document.getElementById("rank-region-search-clear");
+        if (search) {
+            search.oninput = (e) => {
+                rankRegionSearchTerm = e.target.value;
+                renderFilteredRankList();
+            };
+        }
+        if (clear) {
+            clear.onclick = () => {
+                rankRegionSearchTerm = "";
+                if (search) search.value = "";
+                renderFilteredRankList();
+            };
+        }
+        renderFilteredRankList();
     }
     
     const chartPanel = document.getElementById("rank-chart-panel");
@@ -2822,15 +3770,15 @@ function updateRankChart() {
         xAxis: { 
             type: "value", 
             name: advMetrics[advCurrentMetricIndex],
-            axisLine: { lineStyle: { color: isDark ? '#4a5568' : '#dce5ef' } },
-            axisLabel: { color: isDark ? '#a0aec0' : '#5a6e8a' },
-            splitLine: { lineStyle: { color: isDark ? '#2d3748' : '#f0f2f6', type: 'dashed' } }
+            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
+            axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
+            splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
         },
         yAxis: { 
             type: "category", 
             data: selectedData.map(d => d.name), 
-            axisLabel: { fontSize: 11, color: isDark ? '#a0aec0' : '#5a6e8a' },
-            axisLine: { lineStyle: { color: isDark ? '#4a5568' : '#dce5ef' } }
+            axisLabel: { fontSize: 11, color: isDark ? '#dbeafe' : '#263b59' },
+            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } }
         },
         series: [{
             type: "bar",
@@ -2842,7 +3790,7 @@ function updateRankChart() {
                 ]),
                 borderRadius: [0, 4, 4, 0]
             },
-            label: { show: true, position: "right", color: isDark ? '#a0aec0' : '#5a6e8a' }
+            label: { show: true, position: "right", color: isDark ? '#dbeafe' : '#263b59' }
         }]
     };
     
@@ -2887,15 +3835,15 @@ function renderCategoryStats(metric, year) {
         xAxis: { 
             type: "category", 
             data: sorted.map(s => s[0]), 
-            axisLabel: { rotate: 30, color: isDark ? '#a0aec0' : '#5a6e8a' },
-            axisLine: { lineStyle: { color: isDark ? '#4a5568' : '#dce5ef' } }
+            axisLabel: { rotate: 30, color: isDark ? '#dbeafe' : '#263b59' },
+            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } }
         },
         yAxis: { 
             type: "value", 
             name: "出现次数",
-            axisLine: { lineStyle: { color: isDark ? '#4a5568' : '#dce5ef' } },
-            axisLabel: { color: isDark ? '#a0aec0' : '#5a6e8a' },
-            splitLine: { lineStyle: { color: isDark ? '#2d3748' : '#f0f2f6', type: 'dashed' } }
+            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
+            axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
+            splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
         },
         series: [{ 
             type: "bar", 
@@ -2915,7 +3863,7 @@ function renderCategoryStats(metric, year) {
 let currentSearchTerm = "";
 
 function applyFilterAndSort() {
-    let filtered = [...originalRows];
+    let filtered = [...tableRows];
     const searchVal = document.getElementById("search-input")?.value.trim() || "";
     currentSearchTerm = searchVal;
     
@@ -2951,11 +3899,11 @@ function renderTablePage() {
     const end = start + pageSize;
     const pageData = filteredRowsForPage.slice(start, end);
     const searchVal = currentSearchTerm;
-    const visible = headers.filter(h => visibleColumns.has(h));
+    const visible = tableHeaders.filter(h => visibleColumns.has(h));
     
     // 计算统计值
     const stats = {};
-    const numericFields = headers.filter(h => {
+    const numericFields = tableHeaders.filter(h => {
         if (h === '年份' || h === '地区') return false;
         const sample = filteredRowsForPage[0];
         return sample && typeof sample[h] === 'number';
@@ -3073,6 +4021,25 @@ function renderTablePage() {
         const tableContainer = document.querySelector('.table-container');
         if (tableContainer) tableContainer.scrollTop = 0;
     }
+    updateTableDataProcessingNotice(filteredRowsForPage, visible);
+}
+
+function updateTableDataProcessingNotice(rows, headers) {
+    const section = document.getElementById('section-table');
+    const toolbar = section?.querySelector('.table-toolbar');
+    if (!section || !toolbar) return;
+    let notice = section.querySelector('.data-processing-notice.table-data-notice');
+    const shouldShow = hasPotentialMissingValueProcessingFromRows(rows, headers);
+    if (!shouldShow) {
+        notice?.remove();
+        return;
+    }
+    if (!notice) {
+        notice = document.createElement('div');
+        notice.className = 'data-processing-notice table-data-notice';
+        toolbar.insertAdjacentElement('afterend', notice);
+    }
+    notice.innerHTML = '<span>数据提示</span>当前表格中存在较高重复值，可能经过缺失值处理，请结合数据口径谨慎解读。';
 }
 
 function sortTable(key) {
@@ -3106,7 +4073,7 @@ function exportData(type) {
             const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
             const link = document.createElement("a");
             link.href = URL.createObjectURL(blob);
-            link.download = `${currentSheet}_data.csv`;
+            link.download = `${tableSheet}_data.csv`;
             link.click();
             URL.revokeObjectURL(link.href);
             return;
@@ -3116,27 +4083,88 @@ function exportData(type) {
     }
     const ws = XLSX.utils.json_to_sheet(filteredRowsForPage);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, currentSheet);
-    XLSX.writeFile(wb, `${currentSheet}_data.${type === "csv" ? "csv" : "xlsx"}`);
+    XLSX.utils.book_append_sheet(wb, ws, tableSheet);
+    XLSX.writeFile(wb, `${tableSheet}_data.${type === "csv" ? "csv" : "xlsx"}`);
 }
 
 function printTable() { window.print(); }
 
+// Generate a real SVG string from any ECharts instance (works even if source is canvas-rendered)
+function getChartSVGString(chartInstance) {
+    if (!chartInstance || !window.echarts) return null;
+    let option;
+    try { option = chartInstance.getOption(); } catch(e) { return null; }
+    if (!option) return null;
+    
+    const dom = chartInstance.getDom && chartInstance.getDom();
+    const w = (dom && dom.offsetWidth) || 800;
+    const h = (dom && dom.offsetHeight) || 500;
+    
+    const tempDiv = document.createElement('div');
+    tempDiv.style.cssText = `position:absolute;left:-99999px;top:-99999px;width:${w}px;height:${h}px;`;
+    document.body.appendChild(tempDiv);
+    
+    let svgString = null;
+    let tempChart = null;
+    try {
+        tempChart = echarts.init(tempDiv, null, { renderer: 'svg', width: w, height: h });
+        tempChart.setOption(option, true);
+        const svgEl = tempDiv.querySelector('svg');
+        if (svgEl) {
+            // Clone to avoid live DOM references during dispose
+            const cloned = svgEl.cloneNode(true);
+            if (!cloned.getAttribute('xmlns')) cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+            if (!cloned.getAttribute('xmlns:xlink')) cloned.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+            svgString = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n' + new XMLSerializer().serializeToString(cloned);
+        }
+    } catch(e) {
+        console.error('SVG render failed:', e);
+    } finally {
+        try { if (tempChart) tempChart.dispose(); } catch(e) {}
+        try { if (tempDiv.parentNode) tempDiv.parentNode.removeChild(tempDiv); } catch(e) {}
+    }
+    return svgString;
+}
+
 function exportChart(chartInstance, type, filename) {
     if (!chartInstance) return;
-    let url;
+    const isDark = document.body.classList.contains('dark-mode');
     try {
-        if (type === 'png') url = chartInstance.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: document.body.classList.contains('dark-mode') ? '#1a1f2e' : '#ffffff' });
-        else if (type === 'jpg') url = chartInstance.getDataURL({ type: 'jpeg', pixelRatio: 2, backgroundColor: document.body.classList.contains('dark-mode') ? '#1a1f2e' : '#ffffff' });
-        else if (type === 'svg') { url = chartInstance.getDataURL({ type: 'svg' }); }
-        else return;
-    } catch(e) { console.error('Export failed:', e); showToast('图表导出失败，请稍后重试', 'error'); return; }
-    const link = document.createElement('a');
-    link.download = `${filename}.${type === 'jpg' ? 'jpg' : type}`;
-    link.href = url;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+        if (type === 'svg') {
+            const svgStr = getChartSVGString(chartInstance);
+            if (!svgStr) {
+                showToast('SVG 导出失败：图表内容为空或库未加载', 'error');
+                return;
+            }
+            const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+            const blobUrl = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.download = `${filename}.svg`;
+            link.href = blobUrl;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+            return;
+        }
+        // PNG/JPG — for pie charts in dark mode use white background to avoid invisible slices
+        const isPie = filename && filename.includes('pie');
+        const bgColor = (isDark && !isPie) ? '#1a1f2e' : '#ffffff';
+        const url = chartInstance.getDataURL({
+            type: type === 'jpg' ? 'jpeg' : 'png',
+            pixelRatio: 2,
+            backgroundColor: bgColor
+        });
+        const link = document.createElement('a');
+        link.download = `${filename}.${type}`;
+        link.href = url;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    } catch(e) {
+        console.error('Export failed:', e);
+        showToast('图表导出失败，请稍后重试', 'error');
+    }
 }
 
 // ======================= 高级图表模块（卡片式）=======================
@@ -3149,7 +4177,7 @@ function getYears(table = 'province') {
     if (table === 'province') {
         return [...new Set(window.workbook['省份']?.map(r => r['年份']))].sort();
     }
-    return [...new Set(window.workbook['地级市']?.map(r => r['时间']))].sort();
+    return [...new Set(window.workbook['地级市']?.map(r => r['年份'] ?? r['时间']))].filter(v => v !== undefined && v !== null).sort();
 }
 
 function cleanMetricName(key) {
@@ -3162,7 +4190,11 @@ function getAllMetrics(table = 'province') {
     if (table === 'province') sample = window.workbook['省份']?.[0];
     else sample = window.workbook['地级市']?.[0];
     if (!sample) return [];
-    return Object.keys(sample).filter(k => k !== '年份' && k !== '地区' && k !== '时间地区' && typeof sample[k] === 'number');
+    return Object.keys(sample).filter(k => {
+        const key = String(k);
+        if (key === '年份' || key === '时间' || key === '地区' || key === '时间地区') return false;
+        return typeof sample[k] === 'number';
+    });
 }
 
 function getAllRegions(table = 'province') {
@@ -3181,11 +4213,22 @@ function renderControls(type) {
     container.innerHTML = '';
     
     if (type === 'scatter') {
-        const years = getYears();
-        const metrics = getAllMetrics();
-        const regions = getAllRegions();
+        const currentTable = scatterTableMode || (dimType === 'city' ? 'city' : 'province');
+        const years = getYears(currentTable);
+        const metrics = getAllMetrics(currentTable);
+        const regions = getAllRegions(currentTable);
         
         const defaultYear = years.includes(2023) ? 2023 : years[years.length - 1];
+        const tableDiv = document.createElement('div');
+        tableDiv.className = 'control-group';
+        tableDiv.innerHTML = `
+            <span>数据表：</span>
+            <select id="scatter-table">
+                <option value="province" ${currentTable === 'province' ? 'selected' : ''}>省份</option>
+                <option value="city" ${currentTable === 'city' ? 'selected' : ''}>地级市</option>
+            </select>`;
+        container.appendChild(tableDiv);
+
         const yearDiv = document.createElement('div');
         yearDiv.className = 'control-group';
         yearDiv.innerHTML = `<span>年份：</span><select id="scatter-year">${years.map(y => `<option value="${y}" ${y === defaultYear ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
@@ -3203,17 +4246,24 @@ function renderControls(type) {
         yDiv.innerHTML = `<span>Y轴指标：</span><select id="scatter-y">${metrics.map(m => `<option value="${m}" ${m === defaultY ? 'selected' : ''}>${m}</option>`).join('')}</select>`;
         container.appendChild(yDiv);
         
-        const defaultRegions = regions.slice(0, 6);
+        const defaultRegions = currentTable === 'city' ? regions.slice(0, 50) : regions.slice(0, 6);
         const regionDiv = document.createElement('div');
-        regionDiv.className = 'control-group';
+        regionDiv.className = 'scatter-region-section scatter-region-control';
         regionDiv.innerHTML = `
-            <span>地区：</span>
-            <select id="scatter-regions" multiple size="4" style="min-width: 180px;">
+            <div class="scatter-region-header">
+                <span class="scatter-region-label">地区</span>
+                <div class="scatter-region-actions">
+                    <input id="scatter-region-search" class="scatter-search-input" type="text" placeholder="搜索地区">
+                    <button type="button" class="scatter-tag-action" id="scatter-select-all">全选</button>
+                    <button type="button" class="scatter-tag-action ghost" id="scatter-clear-all">清空地区</button>
+                    <button type="button" class="scatter-tag-action ghost" id="scatter-select-visible">选择搜索结果</button>
+                </div>
+            </div>
+            <div id="scatter-region-chips" class="scatter-region-chips"></div>
+            <select id="scatter-regions" multiple hidden>
                 ${regions.map(r => `<option value="${r}" ${defaultRegions.includes(r) ? 'selected' : ''}>${r}</option>`).join('')}
             </select>
-            <button type="button" class="analysis-mini-action" id="scatter-select-all">全选</button>
-            <button type="button" class="analysis-mini-action ghost" id="scatter-clear-all">清空</button>
-            <span class="analysis-help-text">按住 Ctrl 可多选</span>
+            <div id="scatter-selected-summary" class="scatter-selected-summary">已选择 ${defaultRegions.length} 个地区</div>
         `;
         container.appendChild(regionDiv);
         
@@ -3222,15 +4272,150 @@ function renderControls(type) {
         btn.className = 'analysis-run-btn';
         btn.onclick = () => loadChart(type);
         container.appendChild(btn);
+
+        const modalBtn = document.createElement('button');
+        modalBtn.innerText = '查看大图';
+        modalBtn.className = 'analysis-run-btn scatter-modal-btn';
+        modalBtn.onclick = () => openScatterChartModal();
+        container.appendChild(modalBtn);
         
         setTimeout(() => {
+            const tableEl = document.getElementById('scatter-table');
             const selectAll = document.getElementById('scatter-select-all');
             const clearAll = document.getElementById('scatter-clear-all');
+            const selectVisible = document.getElementById('scatter-select-visible');
             const selectEl = document.getElementById('scatter-regions');
-            if (selectAll) selectAll.onclick = () => { Array.from(selectEl?.options || []).forEach(opt => opt.selected = true); };
-            if (clearAll) clearAll.onclick = () => { Array.from(selectEl?.options || []).forEach(opt => opt.selected = false); };
+            const searchEl = document.getElementById('scatter-region-search');
+            const chipsEl = document.getElementById('scatter-region-chips');
+            const summaryEl = document.getElementById('scatter-selected-summary');
+            const syncHiddenSelect = (selected) => {
+                if (!selectEl) return;
+                selectEl.innerHTML = regions.map(r => `<option value="${r}" ${selected.has(r) ? 'selected' : ''}>${r}</option>`).join('');
+                if (summaryEl) summaryEl.textContent = `已选择 ${selected.size} 个地区`;
+            };
+            const getSelected = () => new Set(Array.from(selectEl?.selectedOptions || []).map(opt => opt.value));
+            const renderScatterRegionOptions = () => {
+                if (!chipsEl || !selectEl) return;
+                const keyword = String(searchEl?.value || '').trim().toLowerCase();
+                const selected = getSelected();
+                const filtered = keyword ? regions.filter(r => String(r).toLowerCase().includes(keyword)) : regions;
+                chipsEl.innerHTML = filtered.map(r => `
+                    <button type="button" class="region-chip ${selected.has(r) ? 'active' : ''}" data-region="${escapeHtml(r)}">${escapeHtml(r)}</button>
+                `).join('');
+                chipsEl.querySelectorAll('.region-chip').forEach(chip => {
+                    chip.onclick = () => {
+                        const next = getSelected();
+                        const region = chip.dataset.region;
+                        if (next.has(region)) next.delete(region);
+                        else next.add(region);
+                        syncHiddenSelect(next);
+                        renderScatterRegionOptions();
+                    };
+                });
+                syncHiddenSelect(selected);
+                normalizeScatterControlText();
+            };
+            if (tableEl) tableEl.onchange = () => {
+                scatterTableMode = tableEl.value;
+                renderControls('scatter');
+                setTimeout(() => loadChart('scatter'), 180);
+            };
+            if (searchEl) searchEl.oninput = renderScatterRegionOptions;
+            if (selectAll) selectAll.onclick = () => { syncHiddenSelect(new Set(regions)); renderScatterRegionOptions(); };
+            if (clearAll) clearAll.onclick = () => { syncHiddenSelect(new Set()); renderScatterRegionOptions(); };
+            if (selectVisible) selectVisible.onclick = () => {
+                const selected = getSelected();
+                chipsEl?.querySelectorAll('.region-chip').forEach(chip => selected.add(chip.dataset.region));
+                syncHiddenSelect(selected);
+                renderScatterRegionOptions();
+            };
+            renderScatterRegionOptions();
+            normalizeScatterControlText();
         }, 50);
     }
+}
+
+function normalizeScatterControlText() {
+    const table = document.getElementById('scatter-table');
+    if (table) {
+        const labels = { province: '省份', city: '地级市' };
+        Array.from(table.options || []).forEach(option => {
+            option.textContent = labels[option.value] || option.textContent;
+        });
+    }
+    const labelMap = [
+        ['scatter-table', '数据表：'],
+        ['scatter-year', '年份：'],
+        ['scatter-x', 'X轴指标：'],
+        ['scatter-y', 'Y轴指标：']
+    ];
+    labelMap.forEach(([id, label]) => {
+        const el = document.getElementById(id);
+        const groupLabel = el?.closest('.control-group')?.querySelector('span');
+        if (groupLabel) groupLabel.textContent = label;
+    });
+    const regionLabel = document.querySelector('.scatter-region-label');
+    if (regionLabel) regionLabel.textContent = '地区';
+    const search = document.getElementById('scatter-region-search');
+    if (search) search.placeholder = '搜索地区';
+    const selectAll = document.getElementById('scatter-select-all');
+    if (selectAll) selectAll.textContent = '全选';
+    const clearAll = document.getElementById('scatter-clear-all');
+    if (clearAll) clearAll.textContent = '清空地区';
+    const selectVisible = document.getElementById('scatter-select-visible');
+    if (selectVisible) selectVisible.textContent = '选择搜索结果';
+    const run = document.querySelector('#analysis-controls .analysis-run-btn:not(.scatter-modal-btn)');
+    if (run) run.textContent = '生成散点图';
+    const modal = document.querySelector('#analysis-controls .scatter-modal-btn');
+    if (modal) modal.textContent = '查看大图';
+    const selected = document.getElementById('scatter-regions');
+    const summary = document.getElementById('scatter-selected-summary');
+    if (selected && summary) summary.textContent = `已选择 ${selected.selectedOptions.length} 个地区`;
+}
+
+function hasPotentialMissingValueProcessingFromText(text) {
+    const matches = String(text || '').match(/(?:^|[：:\s])(-?\d+(?:\.\d+)?)(?=\s*$|\s|[，,。；;])/gm) || [];
+    const counts = new Map();
+    matches.forEach(raw => {
+        const value = raw.replace(/[：:\s]/g, '');
+        if (!value) return;
+        counts.set(value, (counts.get(value) || 0) + 1);
+    });
+    return Array.from(counts.values()).some(count => count >= 8);
+}
+
+function hasPotentialMissingValueProcessingFromRows(rows, headers) {
+    if (!Array.isArray(rows) || rows.length < 8 || !Array.isArray(headers)) return false;
+    return headers.some(header => {
+        if (/年份|地区|省份|城市|名称|name|region|year/i.test(String(header))) return false;
+        const values = rows.map(row => row?.[header]).filter(v => typeof v === 'number' && Number.isFinite(v));
+        if (values.length < 8) return false;
+        const counts = new Map();
+        values.forEach(v => counts.set(String(v), (counts.get(String(v)) || 0) + 1));
+        const maxRepeat = Math.max(0, ...counts.values());
+        return maxRepeat >= 8 && maxRepeat / values.length >= 0.45;
+    });
+}
+
+function dataProcessingNoticeHtml() {
+    return `<div class="data-processing-notice">
+        <span>数据提示</span>
+        当前结果中存在较高重复值，可能经过缺失值处理，请结合数据口径谨慎解读。
+    </div>`;
+}
+
+function dataProcessingNoticeHtmlLegacyUnused() {
+    return `<div class="data-processing-notice">
+        <span>数据提示</span>
+        当前结果中存在较高重复值，可能经过缺失值处理，请结合数据口径谨慎解读。
+    </div>`;
+}
+
+function dataProcessingNoticeHtml() {
+    return `<div class="data-processing-notice">
+        <span>数据提示</span>
+        当前结果中存在较高重复值，可能经过缺失值处理，请结合数据口径谨慎解读。
+    </div>`;
 }
 
 async function loadChart(type) {
@@ -3239,6 +4424,7 @@ async function loadChart(type) {
     currentChartInstance = disposeChartInstance(currentChartInstance);
     
     if (type === 'scatter') {
+        const table = document.getElementById('scatter-table')?.value || 'province';
         const year = parseInt(document.getElementById('scatter-year')?.value) || 2023;
         const xMetric = document.getElementById('scatter-x')?.value;
         const yMetric = document.getElementById('scatter-y')?.value;
@@ -3251,46 +4437,97 @@ async function loadChart(type) {
             const res = await fetch('/api/scatter', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ year, xMetric, yMetric, regions })
+                body: JSON.stringify({ table, year, xMetric, yMetric, regions })
             });
             const data = await res.json();
+            if (!res.ok || !Array.isArray(data.data) || !data.data.length) {
+                const message = data?.error || '当前筛选条件下没有可绘制的散点数据';
+                chartDom.innerHTML = `<div class="chart-empty-state"><strong>无法生成散点图</strong><span>${escapeHtml(message)}</span></div>`;
+                window._lastScatterOption = null;
+                showToast(message, 'warn');
+                return;
+            }
             
             const isDark = document.body.classList.contains('dark-mode');
+            const isCityScatter = table === 'city';
             
             const option = {
                 backgroundColor: 'transparent',
                 title: { 
-                    text: `${xMetric} vs ${yMetric} (${year}年)`, 
+                    text: `${table === 'city' ? '地级市' : '省份'} ${xMetric} vs ${yMetric} (${year}年)`, 
                     left: 'center',
+                    top: 8,
                     textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
                 },
+                tooltip: {
+                    trigger: 'item',
+                    confine: true,
+                    backgroundColor: isDark ? 'rgba(15,23,42,.94)' : 'rgba(255,255,255,.96)',
+                    borderColor: isDark ? '#334155' : '#d8e4f2',
+                    textStyle: { color: isDark ? '#e5edf9' : '#22324a' },
+                    formatter: p => {
+                        const item = p.data || [];
+                        return `<strong>${escapeHtml(item[2] || '')}</strong><br>${escapeHtml(data.xName || xMetric)}：${item[0]}<br>${escapeHtml(data.yName || yMetric)}：${item[1]}`;
+                    }
+                },
+                grid: {
+                    left: 92,
+                    right: 76,
+                    top: 74,
+                    bottom: 70,
+                    containLabel: false
+                },
+                dataZoom: isCityScatter ? [
+                    { type: 'inside', xAxisIndex: 0, filterMode: 'none' },
+                    { type: 'inside', yAxisIndex: 0, filterMode: 'none' }
+                ] : [],
                 xAxis: { 
                     name: data.xName, 
                     nameLocation: 'middle', 
-                    nameGap: 35,
-                    axisLine: { lineStyle: { color: isDark ? '#4a5568' : '#dce5ef' } },
-                    axisLabel: { color: isDark ? '#a0aec0' : '#5a6e8a' },
-                    splitLine: { lineStyle: { color: isDark ? '#2d3748' : '#f0f2f6', type: 'dashed' } }
+                    nameGap: 44,
+                    axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
+                    axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
+                    splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
                 },
                 yAxis: { 
                     name: data.yName, 
                     nameLocation: 'middle', 
-                    nameGap: 35,
-                    axisLine: { lineStyle: { color: isDark ? '#4a5568' : '#dce5ef' } },
-                    axisLabel: { color: isDark ? '#a0aec0' : '#5a6e8a' },
-                    splitLine: { lineStyle: { color: isDark ? '#2d3748' : '#f0f2f6', type: 'dashed' } }
+                    nameGap: 52,
+                    axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
+                    axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
+                    splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
                 },
                 series: [{
                     type: 'scatter',
                     data: data.data,
-                    symbolSize: 12,
+                    symbolSize: isCityScatter ? 8 : 12,
                     label: { 
-                        show: true, 
+                        show: !isCityScatter, 
                         formatter: p => p.data[2], 
                         position: 'top', 
                         offset: [0, -8], 
                         fontSize: 10,
-                        color: isDark ? '#a0aec0' : '#5a6e8a'
+                        color: isDark ? '#dbeafe' : '#263b59'
+                    },
+                    emphasis: {
+                        focus: 'self',
+                        label: {
+                            show: true,
+                            formatter: p => p.data[2],
+                            position: 'top',
+                            offset: [0, -8],
+                            fontSize: 11,
+                            color: isDark ? '#fff' : '#1f2b48',
+                            backgroundColor: isDark ? 'rgba(15,23,42,.86)' : 'rgba(255,255,255,.9)',
+                            borderColor: isDark ? '#475569' : '#d8e4f2',
+                            borderWidth: 1,
+                            borderRadius: 6,
+                            padding: [3, 6]
+                        },
+                        itemStyle: {
+                            shadowBlur: 14,
+                            shadowColor: 'rgba(99,102,241,.45)'
+                        }
                     },
                     itemStyle: { 
                         color: new echarts.graphic.RadialGradient(0.4, 0.3, 1, [
@@ -3301,13 +4538,70 @@ async function loadChart(type) {
                 }]
             };
             
+            option.tooltip.formatter = p => {
+                const item = p.data || [];
+                return `<strong>${escapeHtml(item[2] || '')}</strong><br>${escapeHtml(data.xName || xMetric)}：${escapeHtml(item[0] ?? '')}<br>${escapeHtml(data.yName || yMetric)}：${escapeHtml(item[1] ?? '')}`;
+            };
+            option.title.text = `${table === 'city' ? '地级市' : '省份'} ${xMetric} vs ${yMetric} (${year}年)`;
+            const fitHeight = fitScatterPanelToViewport();
             currentChartInstance = initEChartSafe(chartDom);
             currentChartInstance.setOption(option);
-            setTimeout(() => currentChartInstance.resize(), 100);
+            window._lastScatterOption = option;
+            ensureScatterInteractionHint(table);
+            setTimeout(() => currentChartInstance.resize({ height: fitHeight }), 100);
         } catch (e) {
             console.error('散点图加载失败:', e);
         }
     }
+}
+
+function ensureScatterInteractionHint(table) {
+    const chartDom = document.getElementById('analysis-chart');
+    if (!chartDom) return;
+    const old = document.getElementById('scatter-interaction-hint');
+    if (old) old.remove();
+    const hint = document.createElement('div');
+    hint.id = 'scatter-interaction-hint';
+    hint.className = 'scatter-interaction-hint';
+    hint.textContent = table === 'city'
+        ? '地级市点位较密：滚轮缩放、拖动平移，悬停查看城市名称'
+        : '悬停点位查看数据，点击“查看大图”进入沉浸式查看';
+    chartDom.insertAdjacentElement('afterend', hint);
+}
+
+function fitScatterPanelToViewport() {
+    const section = document.getElementById('section-scatter');
+    const panel = document.getElementById('analysis-panel');
+    const chartDom = document.getElementById('analysis-chart');
+    if (!section || !panel || !chartDom) return 520;
+
+    section.classList.add('scatter-fit-mode');
+    panel.style.maxHeight = 'none';
+    panel.style.overflow = 'visible';
+
+    const viewportH = window.innerHeight || document.documentElement.clientHeight || 760;
+    const chartH = Math.max(360, Math.min(470, Math.floor(viewportH * 0.42)));
+
+    section.style.setProperty('--scatter-chart-h', `${chartH}px`);
+    chartDom.style.height = `${chartH}px`;
+    chartDom.style.minHeight = `${chartH}px`;
+
+    requestAnimationFrame(() => {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
+    if (!window._scatterFitResizeBound) {
+        window._scatterFitResizeBound = true;
+        window.addEventListener('resize', debounce(() => {
+            const openPanel = document.getElementById('analysis-panel');
+            if (!openPanel?.classList.contains('open') || activeChart !== 'scatter') return;
+            const nextH = fitScatterPanelToViewport();
+            const chart = echarts.getInstanceByDom(document.getElementById('analysis-chart'));
+            if (chart) chart.resize({ height: nextH });
+        }, 120));
+    }
+
+    return chartH;
 }
 
 function updateAnalysisPanelUI(type, isOpen) {
@@ -3354,11 +4648,11 @@ function openAnalysisPanel(type) {
     // Animate open
     panel.style.display = 'block';
     panel.style.maxHeight = '0';
-    panel.style.overflow = 'hidden';
-    panel.style.transition = 'max-height 0.4s cubic-bezier(0.4,0,0.2,1)';
+    panel.style.overflow = 'visible';
+    panel.style.transition = 'max-height 0.4s cubic-bezier(0.4,0,0.2,1), opacity 0.24s ease';
     requestAnimationFrame(() => {
         panel.classList.add('open');
-        panel.style.maxHeight = '800px';
+        panel.style.maxHeight = Math.max(panel.scrollHeight + 80, 980) + 'px';
     });
     
     // Highlight active card
@@ -3369,6 +4663,8 @@ function openAnalysisPanel(type) {
     setTimeout(() => {
         loadChart(type);
         bindExportEvents();
+        panel.style.maxHeight = 'none';
+        panel.style.overflow = 'visible';
         panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }, 150);
 }
@@ -3388,10 +4684,26 @@ function exportAnalysisChart(format) {
     }
     const isDark = document.body.classList.contains('dark-mode');
     const bg = isDark ? '#1a2236' : '#ffffff';
+    if (format === 'svg') {
+        const svgStr = getChartSVGString(chart);
+        if (!svgStr) {
+            showToast('SVG 导出失败：请先生成图表后重试', 'error');
+            return;
+        }
+        const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.download = `scatter_${activeChart}_${Date.now()}.svg`;
+        link.href = blobUrl;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+        return;
+    }
     let url;
     if (format === 'png') url = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: bg });
     else if (format === 'jpg') url = chart.getDataURL({ type: 'jpeg', pixelRatio: 2, backgroundColor: bg });
-    else url = chart.getDataURL({ type: 'svg' });
     const link = document.createElement('a');
     link.download = `scatter_${activeChart}_${Date.now()}.${format === 'jpg' ? 'jpg' : format}`;
     link.href = url;
@@ -3409,7 +4721,6 @@ function bindExportEvents() {
     };
     bind('export-chart-png', () => exportAnalysisChart('png'));
     bind('export-chart-jpg', () => exportAnalysisChart('jpg'));
-    bind('export-chart-svg', () => exportAnalysisChart('svg'));
 }
 
 function initAnalysisCards() {
@@ -3439,6 +4750,7 @@ function initAnalysisCards() {
 function waitForWorkbook() {
     if (window.workbook && window.workbook['省份'] && window.workbook['省份'].length) {
         initAnalysisCards();
+        ensureDashboardAnalysisVisible();
     } else {
         setTimeout(waitForWorkbook, 300);
     }
@@ -3584,13 +4896,10 @@ function bindEvents() {
     
     document.getElementById("export-main-png")?.addEventListener("click", () => exportChart(mainChart, 'png', 'main_chart'));
     document.getElementById("export-main-jpg")?.addEventListener("click", () => exportChart(mainChart, 'jpg', 'main_chart'));
-    document.getElementById("export-main-svg")?.addEventListener("click", () => exportChart(mainChart, 'svg', 'main_chart'));
     document.getElementById("export-pie-png")?.addEventListener("click", () => exportChart(pieChart, 'png', 'pie_chart'));
     document.getElementById("export-pie-jpg")?.addEventListener("click", () => exportChart(pieChart, 'jpg', 'pie_chart'));
-    document.getElementById("export-pie-svg")?.addEventListener("click", () => exportChart(pieChart, 'svg', 'pie_chart'));
     document.getElementById("export-adv-png")?.addEventListener("click", () => exportChart(advancedChart, 'png', 'advanced_chart'));
     document.getElementById("export-adv-jpg")?.addEventListener("click", () => exportChart(advancedChart, 'jpg', 'advanced_chart'));
-    document.getElementById("export-adv-svg")?.addEventListener("click", () => exportChart(advancedChart, 'svg', 'advanced_chart'));
     
     // 夜间模式
     initDarkMode();
@@ -3664,6 +4973,455 @@ function dismissToast(toast) {
 
 // ======================= 启动 =======================
 
+// Legacy implementation kept inert; final executeAgentUiActions is defined below.
+function executeAgentUiActionsLegacyUnused(data, question, sourceBubble) {
+    if (!sourceBubble) return;
+    const hasChart = !!(data?.chart && data.chart.metric);
+    const q = String(question || '');
+    const wantsExport = /导出|下载|保存|生成文件|Excel|CSV|PNG|JPG|SVG/i.test(q);
+    const wantsReport = /报告|分析稿|总结文档|生成总结|生成分析/.test(q);
+    if (!hasChart && !wantsExport && !wantsReport) return;
+    if (sourceBubble.querySelector('.agent-ui-actions')) return;
+
+    const actions = [];
+    actions.push({ id: 'open-data-table', label: '查看数据明细' });
+    if (hasChart) actions.push({ id: 'inline-chart', label: '展开图表' });
+    if (hasChart) actions.push({ id: 'export-inline-chart', label: '导出图表 PNG' });
+    if (wantsExport) actions.push({ id: 'export-chat-table', label: '导出回答 CSV' });
+    actions.push({ id: 'report-html', label: '生成报告' });
+
+    const box = document.createElement('div');
+    box.className = 'agent-ui-actions';
+    box._agentData = data;
+    box._agentQuestion = question || '';
+    box.innerHTML = `
+        <div class="agent-ui-action-title">可执行操作</div>
+        <div class="agent-ui-action-row">
+            ${actions.map(action => `<button type="button" class="agent-action-btn" data-agent-action="${action.id}">${escapeHtml(action.label)}</button>`).join('')}
+        </div>
+    `;
+    sourceBubble.appendChild(box);
+}
+
+function executeAgentUiActions(data, question, sourceBubble) {
+    if (!sourceBubble) return;
+    const hasChart = !!(data?.chart && data.chart.metric);
+    const hasDataContext = hasChart || (Array.isArray(data?.citations) && data.citations.length > 0) || data?.data || data?.table;
+    const q = String(question || '');
+    const wantsExport = /导出|下载|保存|生成文件|Excel|CSV|PNG|JPG|SVG/i.test(q);
+    const wantsReport = /报告|分析报告|总结文档|生成总结|生成分析/.test(q);
+    if (!hasDataContext && !wantsExport && !wantsReport) return;
+    if (sourceBubble.querySelector('.agent-ui-actions')) return;
+
+    const actions = [];
+    actions.push({ id: 'open-data-table', label: '跳转明细表' });
+    if (hasChart) actions.push({ id: 'inline-chart', label: '展开图表' });
+    if (hasChart) actions.push({ id: 'export-inline-chart', label: '导出图表 PNG' });
+    if (wantsExport) actions.push({ id: 'export-chat-table', label: '导出回答 CSV' });
+    actions.push({ id: 'report-html', label: '生成报告 DOCX' });
+
+    const box = document.createElement('div');
+    box.className = 'agent-ui-actions';
+    box._agentData = data;
+    box._agentQuestion = question || '';
+    box.innerHTML = `
+        <div class="agent-ui-action-title">可执行操作</div>
+        <div class="agent-ui-action-row">
+            ${actions.map(action => `<button type="button" class="agent-action-btn" data-agent-action="${action.id}">${escapeHtml(action.label)}</button>`).join('')}
+        </div>
+    `;
+    sourceBubble.appendChild(box);
+}
+
+function renderAgentChartInsideBubble(bubble, config) {
+    if (!bubble || !config?.metric) return null;
+    let wrap = bubble.querySelector('.agent-inline-chart-wrap');
+    if (!wrap) {
+        wrap = document.createElement('div');
+        wrap.className = 'agent-inline-chart-wrap';
+        wrap.innerHTML = '<div class="agent-inline-chart"></div>';
+        const actions = bubble.querySelector('.agent-ui-actions');
+        bubble.insertBefore(wrap, actions || null);
+    }
+    const chartEl = wrap.querySelector('.agent-inline-chart');
+    const chartId = 'agent_inline_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+    chartEl.id = chartId;
+    chartEl.style.height = '360px';
+    chartEl.style.width = '100%';
+    requestAnimationFrame(() => _doRenderInlineChart(chartId, config, false));
+    return chartId;
+}
+
+function exportNearestAgentChart(bubble, config) {
+    let chartEl = bubble?.querySelector('.agent-inline-chart');
+    if (!window.echarts) {
+        showToast('图表库尚未加载，暂时无法导出', 'warn');
+        return;
+    }
+    if (!chartEl || !echarts.getInstanceByDom(chartEl)) {
+        renderAgentChartInsideBubble(bubble, config);
+    }
+    setTimeout(() => {
+        chartEl = bubble?.querySelector('.agent-inline-chart');
+        const chart = chartEl && echarts.getInstanceByDom(chartEl);
+        if (!chart) {
+            showToast('图表尚未生成，请先展开图表', 'warn');
+            return;
+        }
+        const url = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#ffffff' });
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `agent_chart_${Date.now()}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }, 260);
+}
+
+function exportAnswerAsCsv(data) {
+    const lines = String(data?.answer || '').split('\n').map(line => line.trim()).filter(Boolean);
+    const csv = '\ufeff内容\n' + lines.map(line => `"${line.replace(/"/g, '""')}"`).join('\n');
+    agentDownload(`agent_answer_${Date.now()}.csv`, 'text/csv;charset=utf-8', csv);
+}
+
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('.agent-action-btn[data-agent-action]');
+    if (!btn) return;
+    const box = btn.closest('.agent-ui-actions');
+    const bubble = btn.closest('.rag-bubble');
+    const data = box?._agentData || {};
+    const question = box?._agentQuestion || '';
+    const action = btn.dataset.agentAction;
+    if (action === 'inline-chart') renderAgentChartInsideBubble(bubble, data.chart);
+    if (action === 'export-inline-chart') exportNearestAgentChart(bubble, data.chart);
+    if (action === 'export-chat-table') exportAnswerAsCsv(data);
+    if (action === 'report-html') agentGenerateReport(data, question);
+    if (action === 'open-data-table') jumpToDataTableFromAgent();
+});
+
+function jumpToDataTableFromAgent() {
+    closeRagFullscreen();
+    setTimeout(() => {
+        const table = document.getElementById('section-table');
+        if (table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 260);
+}
+
+// Final closeout overrides: DOCX export and fullscreen scatter inspection.
+function agentDownloadBlob(filename, blob) {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+function agentXmlText(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
+
+function agentPlainText(value) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = formatAnswer(String(value || ''));
+    return (tmp.textContent || tmp.innerText || String(value || '')).trim();
+}
+
+function agentDocxParagraph(text, style) {
+    const lines = String(text || '').split(/\n+/).map(x => x.trim()).filter(Boolean);
+    const pStyle = style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : '';
+    if (!lines.length) return `<w:p>${pStyle}<w:r><w:t></w:t></w:r></w:p>`;
+    return lines.map(line => `<w:p>${pStyle}<w:r><w:t xml:space="preserve">${agentXmlText(line)}</w:t></w:r></w:p>`).join('');
+}
+
+function agentCrc32(bytes) {
+    if (!window._agentCrcTable) {
+        window._agentCrcTable = Array.from({ length: 256 }, (_, n) => {
+            let c = n;
+            for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+            return c >>> 0;
+        });
+    }
+    let crc = 0xffffffff;
+    for (let i = 0; i < bytes.length; i++) crc = window._agentCrcTable[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+    return (crc ^ 0xffffffff) >>> 0;
+}
+
+function agentZipStore(files) {
+    const enc = new TextEncoder();
+    const localParts = [];
+    const centralParts = [];
+    let offset = 0;
+    const now = new Date();
+    const dosTime = ((now.getHours() & 31) << 11) | ((now.getMinutes() & 63) << 5) | (Math.floor(now.getSeconds() / 2) & 31);
+    const dosDate = (((now.getFullYear() - 1980) & 127) << 9) | (((now.getMonth() + 1) & 15) << 5) | (now.getDate() & 31);
+    const u16 = n => [n & 255, (n >>> 8) & 255];
+    const u32 = n => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
+
+    files.forEach(file => {
+        const nameBytes = enc.encode(file.name);
+        const dataBytes = enc.encode(file.content);
+        const crc = agentCrc32(dataBytes);
+        const localHeader = new Uint8Array([
+            ...u32(0x04034b50), ...u16(20), ...u16(0), ...u16(0), ...u16(dosTime), ...u16(dosDate),
+            ...u32(crc), ...u32(dataBytes.length), ...u32(dataBytes.length), ...u16(nameBytes.length), ...u16(0)
+        ]);
+        localParts.push(localHeader, nameBytes, dataBytes);
+        const centralHeader = new Uint8Array([
+            ...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(dosTime), ...u16(dosDate),
+            ...u32(crc), ...u32(dataBytes.length), ...u32(dataBytes.length), ...u16(nameBytes.length), ...u16(0), ...u16(0),
+            ...u16(0), ...u16(0), ...u32(0), ...u32(offset)
+        ]);
+        centralParts.push(centralHeader, nameBytes);
+        offset += localHeader.length + nameBytes.length + dataBytes.length;
+    });
+
+    const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+    const end = new Uint8Array([
+        ...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length),
+        ...u32(centralSize), ...u32(offset), ...u16(0)
+    ]);
+    return new Blob([...localParts, ...centralParts, end], {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    });
+}
+
+function agentBuildDocx(data, question) {
+    const now = new Date().toLocaleString();
+    const title = String(question || 'AI 数据分析报告').slice(0, 80);
+    const reasoning = (data.reasoning || []).map(x => String(x)).filter(Boolean);
+    const citations = (data.citations || []).map(x => String(x)).filter(Boolean);
+    const trace = (data.toolTrace || []).map(t => `${t.normalizedTool || t.tool || 'tool'}: ${JSON.stringify(t.params || {})}`);
+    const sections = [
+        agentDocxParagraph(title, 'Title'),
+        agentDocxParagraph(`生成时间：${now} · 来源：山东财经大学科研教育人才一体化数据平台 Agent`),
+        agentDocxParagraph('分析结论', 'Heading1'),
+        agentDocxParagraph(agentPlainText(data.answer || '')),
+        reasoning.length ? agentDocxParagraph('思考摘要', 'Heading1') + reasoning.map(x => agentDocxParagraph(`- ${x}`)).join('') : '',
+        trace.length ? agentDocxParagraph('工具调用', 'Heading1') + trace.map(x => agentDocxParagraph(`- ${x}`)).join('') : '',
+        citations.length ? agentDocxParagraph('数据来源', 'Heading1') + citations.map(x => agentDocxParagraph(`- ${x}`)).join('') : ''
+    ].join('');
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body>${sections}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body>
+</w:document>`;
+    const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:rPr><w:b/><w:sz w:val="36"/><w:color w:val="0F4F97"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:b/><w:sz w:val="28"/><w:color w:val="12345F"/></w:rPr></w:style>
+</w:styles>`;
+    return agentZipStore([
+        { name: '[Content_Types].xml', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>' },
+        { name: '_rels/.rels', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
+        { name: 'word/document.xml', content: documentXml },
+        { name: 'word/styles.xml', content: stylesXml }
+    ]);
+}
+
+function agentGenerateReport(data, question) {
+    const docx = agentBuildDocx(data, question);
+    agentDownloadBlob(`agent_report_${Date.now()}.docx`, docx);
+    showToast?.('分析报告 DOCX 已生成并下载', 'success');
+}
+
+function openScatterChartModal() {
+    const option = window._lastScatterOption;
+    if (!option) {
+        showToast?.('请先生成散点图', 'warn');
+        return;
+    }
+    const old = document.getElementById('scatter-chart-modal');
+    if (old) old.remove();
+    const modal = document.createElement('div');
+    modal.id = 'scatter-chart-modal';
+    modal.className = 'scatter-chart-modal';
+    modal.innerHTML = `
+        <div class="scatter-modal-shell">
+            <div class="scatter-modal-head">
+                <span class="scatter-modal-hint">滚轮缩放 · 拖动平移 · 悬停查看名称与数值</span>
+                <strong>散点图交互查看</strong>
+                <button type="button" class="scatter-modal-close" aria-label="关闭">×</button>
+            </div>
+            <div id="scatter-modal-chart" class="scatter-modal-chart"></div>
+        </div>`;
+    document.body.appendChild(modal);
+    const modalHead = modal.querySelector('.scatter-modal-head');
+    const modalTitle = modalHead?.querySelector('strong');
+    const modalHint = modalHead?.querySelector('.scatter-modal-hint');
+    const modalClose = modalHead?.querySelector('.scatter-modal-close');
+    if (modalTitle) modalTitle.textContent = '散点图交互查看';
+    if (modalHint) modalHint.textContent = '滚轮缩放 · 拖动平移 · 悬停查看名称与数值';
+    if (modalClose) {
+        modalClose.textContent = '×';
+        modalClose.setAttribute('aria-label', '关闭');
+    }
+    const close = () => {
+        const chart = echarts.getInstanceByDom(document.getElementById('scatter-modal-chart'));
+        if (chart) chart.dispose();
+        modal.remove();
+    };
+    modal.querySelector('.scatter-modal-close').onclick = close;
+    modal.addEventListener('click', e => { if (e.target === modal) close(); });
+    const chart = initEChartSafe(document.getElementById('scatter-modal-chart'));
+    chart.setOption(option);
+    setTimeout(() => chart.resize(), 60);
+}
+
+function agentActionIcon(type) {
+    const href = {
+        chart: '#ico-chart-bar',
+        expand: '#ico-search',
+        table: '#ico-table',
+        download: '#ico-src',
+        report: '#ico-print'
+    }[type] || '#ico-star';
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="${href}"/></svg>`;
+}
+
+function executeAgentUiActions(data, question, sourceBubble) {
+    if (!sourceBubble) return;
+    const hasChart = !!(data?.chart && data.chart.metric);
+    const hasDataContext = hasChart || (Array.isArray(data?.citations) && data.citations.length > 0) || data?.data || data?.table;
+    const q = String(question || '');
+    const wantsExport = /导出|下载|保存|生成文件|Excel|CSV|PNG|JPG|SVG/i.test(q);
+    const wantsReport = /报告|分析报告|总结文档|生成总结|生成分析/.test(q);
+    if (!hasDataContext && !wantsExport && !wantsReport) return;
+    if (sourceBubble.querySelector('.agent-ui-actions')) return;
+
+    const actions = [];
+    if (hasChart) actions.push({ id: 'inline-chart', label: '展开图表', icon: 'chart' });
+    if (hasChart) actions.push({ id: 'chart-modal', label: '大图查看', icon: 'expand' });
+    actions.push({ id: 'open-data-table', label: '查看明细', icon: 'table' });
+    if (hasChart) actions.push({ id: 'export-inline-chart', label: '导出 PNG', icon: 'download' });
+    if (wantsExport) actions.push({ id: 'export-chat-table', label: '导出 CSV', icon: 'download' });
+    actions.push({ id: 'report-html', label: '生成报告', icon: 'report' });
+
+    const box = document.createElement('div');
+    box.className = 'agent-ui-actions';
+    box._agentData = data;
+    box._agentQuestion = question || '';
+    box.innerHTML = `
+        <div class="agent-ui-action-title">可展开分析</div>
+        <div class="agent-ui-action-row">
+            ${actions.map(action => `<button type="button" class="agent-action-btn" data-agent-action="${action.id}" title="${escapeHtml(action.label)}">${agentActionIcon(action.icon)}<span>${escapeHtml(action.label)}</span></button>`).join('')}
+        </div>
+    `;
+    sourceBubble.appendChild(box);
+}
+
+const renderAgentChartInsideBubbleBase = renderAgentChartInsideBubble;
+renderAgentChartInsideBubble = function(bubble, config) {
+    const id = renderAgentChartInsideBubbleBase(bubble, config);
+    const wrap = bubble?.querySelector('.agent-inline-chart-wrap');
+    if (wrap) wrap.classList.add('open');
+    const toggle = bubble?.querySelector('.agent-action-btn[data-agent-action="inline-chart"] span');
+    if (toggle) toggle.textContent = '刷新图表';
+    return id;
+};
+
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('.agent-action-btn[data-agent-action="chart-modal"]');
+    if (!btn) return;
+    const box = btn.closest('.agent-ui-actions');
+    const data = box?._agentData || {};
+    if (data.chart && typeof openChartModal === 'function') openChartModal(data.chart);
+});
+
+const initSdufeCoverBase = initSdufeCover;
+initSdufeCover = function() {
+    initSdufeCoverBase?.();
+    initSdufeLogoBubble();
+};
+
+function initSdufeLogoBubble() {
+    const cover = document.getElementById('sdufe-cover');
+    const seal = cover?.querySelector('.relief-seal');
+    if (!cover || !seal || cover._bubbleBound) return;
+    cover._bubbleBound = true;
+
+    cover.querySelector('.sdufe-logo-bubble')?.remove();
+    seal.classList.add('logo-bubble-active');
+    const logo = seal.querySelector('.cover-seal-logo') || cover.querySelector('.cover-seal-logo');
+    if (logo) {
+        logo.classList.add('cover-logo-bubble');
+        if (logo.parentElement !== cover) cover.appendChild(logo);
+    }
+
+    const state = { x: 77, y: 64, vx: 0.085, vy: 0.062, last: performance.now() };
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const visible = () => document.body.classList.contains('sdufe-cover-active')
+        && cover.offsetParent !== null
+        && getComputedStyle(cover).display !== 'none';
+
+    function tick(now) {
+        if (!visible()) {
+            state.last = now;
+            requestAnimationFrame(tick);
+            return;
+        }
+        const dt = clamp((now - state.last) / 16.67, 0.35, 2.2);
+        state.last = now;
+        state.x += state.vx * dt;
+        state.y += state.vy * dt;
+
+        const minX = 58;
+        const maxX = 92;
+        const minY = 45;
+        const maxY = 86;
+        const diagonal = 132;
+        if (state.x < minX) { state.x = minX; state.vx = Math.abs(state.vx); }
+        if (state.x > maxX) { state.x = maxX; state.vx = -Math.abs(state.vx); }
+        if (state.y < minY) { state.y = minY; state.vy = Math.abs(state.vy); }
+        if (state.y > maxY) { state.y = maxY; state.vy = -Math.abs(state.vy); }
+        if (state.x + state.y < diagonal) {
+            const deficit = diagonal - state.x - state.y;
+            state.x += deficit * 0.52;
+            state.y += deficit * 0.48;
+            const vx = state.vx;
+            state.vx = Math.abs(state.vy) * 0.92;
+            state.vy = Math.abs(vx) * 0.92;
+        }
+
+        seal.style.setProperty('--seal-bubble-x', `${state.x.toFixed(2)}%`);
+        seal.style.setProperty('--seal-bubble-y', `${state.y.toFixed(2)}%`);
+        if (logo) {
+            logo.style.setProperty('--seal-bubble-x', `${state.x.toFixed(2)}%`);
+            logo.style.setProperty('--seal-bubble-y', `${state.y.toFixed(2)}%`);
+        }
+        cover.style.setProperty('--mx', `${state.x.toFixed(2)}%`);
+        cover.style.setProperty('--my', `${state.y.toFixed(2)}%`);
+
+        const sealRect = seal.getBoundingClientRect();
+        const coverRect = cover.getBoundingClientRect();
+        const px = coverRect.left + coverRect.width * state.x / 100;
+        const py = coverRect.top + coverRect.height * state.y / 100;
+        const bx = clamp((px - sealRect.left) / sealRect.width * 100, 0, 100);
+        const by = clamp((py - sealRect.top) / sealRect.height * 100, 0, 100);
+        seal.style.setProperty('--bx', `${bx.toFixed(2)}%`);
+        seal.style.setProperty('--by', `${by.toFixed(2)}%`);
+        seal.style.setProperty('--mx', `${bx.toFixed(2)}%`);
+        seal.style.setProperty('--my', `${by.toFixed(2)}%`);
+        seal.style.setProperty('--br', `${clamp(Math.min(sealRect.width, sealRect.height) * 0.92, 82, 138).toFixed(1)}px`);
+        seal.classList.add('brush-active');
+        cover.classList.add('bubble-mode');
+        requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+}
+
 waitForWorkbook();
 bindEvents();
+initLandingScrollHint();
+initSdufeCover();
+refineLandingCapabilities();
+refineRagCapabilityBadges();
+initSheetSwitchGuide();
+initPaginationGuide();
+ensureDashboardAnalysisVisible();
 init();

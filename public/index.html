@@ -104,6 +104,41 @@
 <div id="landing-page" class="landing-page">
     <canvas id="hero-canvas"></canvas>
 
+    <section id="sdufe-cover" class="sdufe-cover" aria-label="山东财经大学科研教育人才数据平台封面">
+        <div class="sdufe-cover-bgword"><span>S</span><span>D</span><span>U</span><span>F</span><span>E</span></div>
+        <div class="sdufe-relief relief-library">
+            <span></span><span></span><span></span><span></span>
+        </div>
+        <div class="sdufe-relief relief-data">
+            <i></i><i></i><i></i><i></i><i></i>
+        </div>
+        <div class="sdufe-relief relief-network" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div class="sdufe-cover-wave-field" aria-hidden="true"></div>
+        <div class="sdufe-cover-light-sweep" aria-hidden="true"></div>
+        <div class="sdufe-relief relief-seal">
+            <img class="cover-seal-logo" src="images/sdufe-logo.png" alt="山东财经大学校徽">
+        </div>
+        <button id="darkModeToggleCover" class="sdufe-cover-dark-btn" type="button" aria-label="切换夜间模式">
+            <svg width="14" height="14" id="dark-icon-cover"><use href="#ico-moon"/></svg>
+            <span id="dark-label-cover">夜间</span>
+        </button>
+        <div class="sdufe-cover-content">
+            <div class="sdufe-cover-kicker">SHANDONG UNIVERSITY OF FINANCE AND ECONOMICS</div>
+            <h1>科研教育人才一体化数据平台</h1>
+            <p>面向省域、城市与全国指标的智能分析入口</p>
+            <button class="sdufe-slide-enter" type="button" onclick="enterSdufeCover()">
+                <span>Explore →</span>
+                <b></b><b></b><b></b>
+            </button>
+        </div>
+    </section>
+
+    <button class="cover-return-tab" type="button" onclick="returnToSdufeCover()" aria-label="返回封面">
+        <span></span>
+    </button>
+
     <!-- Atmospheric overlays -->
     <div class="lp-aurora lp-aurora-1"></div>
     <div class="lp-aurora lp-aurora-2"></div>
@@ -176,35 +211,35 @@
                 多源数据联动 · 指标溯源 · 趋势预测 · 专题研判
             </p>
 
-            <!-- Three pillars -->
+            <!-- Three pillars — quick entry to the three main usage modes -->
             <div class="hero-pillars">
                 <div class="pillar-item" onclick="enterDashboard('rag')">
                     <div class="pillar-icon-wrap">
                         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-brain"/></svg>
                     </div>
                     <div>
-                        <span class="pillar-name">数据问答</span>
+                        <span class="pillar-name">AI 智能问答</span>
                         <span class="pillar-desc">自然语言直达指标</span>
                     </div>
                 </div>
                 <div class="pillar-sep"></div>
-                <div class="pillar-item" onclick="enterDashboard('rank')">
+                <div class="pillar-item" onclick="enterDashboard()">
                     <div class="pillar-icon-wrap">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-trend"/></svg>
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-chart-bar"/></svg>
                     </div>
                     <div>
-                        <span class="pillar-name">趋势分析</span>
-                        <span class="pillar-desc">多维指标可视化</span>
+                        <span class="pillar-name">数据看板</span>
+                        <span class="pillar-desc">主图表 · 饼图 · 排名</span>
                     </div>
                 </div>
                 <div class="pillar-sep"></div>
-                <div class="pillar-item" onclick="enterDashboard('scatter')">
+                <div class="pillar-item" onclick="enterDashboard('table')">
                     <div class="pillar-icon-wrap">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-scatter"/></svg>
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-table"/></svg>
                     </div>
                     <div>
-                        <span class="pillar-name">关联洞察</span>
-                        <span class="pillar-desc">地区相关性挖掘</span>
+                        <span class="pillar-name">明细查询</span>
+                        <span class="pillar-desc">分页 · 筛选 · 导出</span>
                     </div>
                 </div>
             </div>
@@ -302,11 +337,14 @@
         </div><!-- /hero-right -->
     </section>
 
-    <!-- Scroll hint -->
+    <!-- Scroll hint with animated downward indicator -->
     <div class="hero-scroll-hint" onclick="scrollToFeatures()">
         <div class="scroll-pill">
-            <span>探索功能</span>
+            <span>下滑探索更多功能</span>
             <div class="scroll-dot-track"><div class="scroll-dot"></div></div>
+            <svg class="scroll-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="6 9 12 15 18 9"/>
+            </svg>
         </div>
     </div>
 
@@ -348,21 +386,21 @@
                     <div class="c3d-icon-wrap">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-brain"/></svg>
                     </div>
-                    <h3>数据问答中心</h3>
-                    <p>自然语言查询指标、地区和年份，自动整理结果、图表和数据来源，支持多轮追问</p>
+                    <h3>多轮推理问答</h3>
+                    <p>Agent 自动分解意图，调用趋势/对比/预测/排名工具，附带数据来源溯源与置信区间</p>
                     <div class="c3d-badge">核心功能</div>
-                    <div class="c3d-enter">进入
+                    <div class="c3d-enter">体验问答
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#ico-arrow-right"/></svg>
                     </div>
                 </div>
                 <div class="c3d-item" data-feature="rank" onclick="enterDashboard('rank')">
                     <div class="c3d-glow"></div>
                     <div class="c3d-icon-wrap">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-chart-bar"/></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-trend"/></svg>
                     </div>
-                    <h3>数据看板</h3>
-                    <p>省份/全国多维指标，轮播折线/柱状图，动态排名对比，实时交互探索</p>
-                    <div class="c3d-enter">进入
+                    <h3>时序趋势分析</h3>
+                    <p>支持折线/柱状/堆叠多种形态，年份轮播自动巡检指标，鼠标交互即时联动对比</p>
+                    <div class="c3d-enter">查看趋势
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#ico-arrow-right"/></svg>
                     </div>
                 </div>
@@ -371,9 +409,9 @@
                     <div class="c3d-icon-wrap">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-pie"/></svg>
                     </div>
-                    <h3>占比分析</h3>
-                    <p>总-分结构饼图，省份占比轮播，支持隐藏/显示单独省份扇区交互操作</p>
-                    <div class="c3d-enter">进入
+                    <h3>结构占比拆解</h3>
+                    <p>全国/省份双向校验总量，单点交互隐藏/合并扇区，识别非省份部分与数据缺失</p>
+                    <div class="c3d-enter">分析占比
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#ico-arrow-right"/></svg>
                     </div>
                 </div>
@@ -382,9 +420,9 @@
                     <div class="c3d-icon-wrap">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-scatter"/></svg>
                     </div>
-                    <h3>关联分析</h3>
-                    <p>双指标散点图，地区气泡标注，揭示科研投入与产出之间的深层相关性</p>
-                    <div class="c3d-enter">进入
+                    <h3>双指标关联挖掘</h3>
+                    <p>选择任意两个指标投射散点空间，地区气泡标注辅助识别离群值与回归趋势</p>
+                    <div class="c3d-enter">发现关联
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#ico-arrow-right"/></svg>
                     </div>
                 </div>
@@ -478,6 +516,7 @@
         <div class="cta-card">
             <!-- Decorative emblem -->
             <div class="cta-emblem">
+                <img src="images/sdufe-logo.png" alt="山东财经大学" class="cta-logo-img">
                 <svg width="48" height="56" viewBox="0 0 38 44">
                     <defs>
                         <linearGradient id="ctaGold" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -517,7 +556,7 @@
                 <svg width="16" height="16"><use href="#ico-back"/></svg>
             </button>
             <div class="dash-brand">
-                <svg class="dash-brand-hex"><use href="#ico-hex"/></svg>
+                <img src="images/sdufe-logo.png" alt="山东财经大学" class="dash-brand-logo">
                 <div class="dash-brand-info">
                     <div class="dash-brand-name">科研教育数据平台</div>
                     <div class="dash-brand-sub">主图表 · 饼图轮播 · 排名对比 · 智能问答</div>
@@ -639,7 +678,6 @@
                     <span class="export-label">导出</span>
                     <button id="export-main-png" class="mini-btn">PNG</button>
                     <button id="export-main-jpg" class="mini-btn">JPG</button>
-                    <button id="export-main-svg" class="mini-btn">SVG</button>
                 </div>
             </div>
         </div>
@@ -687,7 +725,6 @@
                 <span class="export-label">导出饼图</span>
                 <button id="export-pie-png" class="mini-btn">PNG</button>
                 <button id="export-pie-jpg" class="mini-btn">JPG</button>
-                <button id="export-pie-svg" class="mini-btn">SVG</button>
             </div>
         </div>
 
@@ -706,7 +743,6 @@
                 <span class="export-label">导出</span>
                 <button id="export-adv-png" class="mini-btn">PNG</button>
                 <button id="export-adv-jpg" class="mini-btn">JPG</button>
-                <button id="export-adv-svg" class="mini-btn">SVG</button>
             </div>
         </div>
 
@@ -734,11 +770,11 @@
             <div id="analysis-panel" style="display:none;">
                 <div class="analysis-panel-header">
                     <span id="panel-title">散点图分析</span>
-                    <div style="display:flex;gap:8px;">
+                    <div class="analysis-panel-actions">
+                        <span class="export-label">导出</span>
                         <button id="export-chart-png" class="mini-btn">PNG</button>
                         <button id="export-chart-jpg" class="mini-btn">JPG</button>
-                        <button id="export-chart-svg" class="mini-btn">SVG</button>
-                        <button id="close-panel" class="close-btn analysis-close-btn" type="button">收起分析</button>
+                        <button id="close-panel" class="close-btn analysis-close-btn" type="button">收起</button>
                     </div>
                 </div>
                 <div id="analysis-controls" class="analysis-controls"></div>
@@ -832,7 +868,7 @@
     <!-- Sidebar -->
     <aside class="rag-sidebar">
         <div class="rag-brand">
-            <svg class="rag-brand-hex"><use href="#ico-hex"/></svg>
+            <img src="images/sdufe-logo.png" alt="山东财经大学" class="rag-brand-logo">
             <span class="rag-brand-title">AI 分析助手</span>
         </div>
 
@@ -1029,8 +1065,12 @@ window.addEventListener('DOMContentLoaded', () => {
         const lbl2 = document.getElementById('dark-label2');
         const icon0 = document.getElementById('dark-icon-landing');
         const lbl0 = document.getElementById('dark-label-landing');
+        const iconCover = document.getElementById('dark-icon-cover');
+        const lblCover = document.getElementById('dark-label-cover');
         const href = dark ? '#ico-sun' : '#ico-moon';
         const txt = dark ? '日间' : '夜间';
+        if (iconCover) { const u = iconCover.querySelector('use'); if(u) u.setAttribute('href', href); }
+        if (lblCover) lblCover.textContent = txt;
         if (icon0) { const u = icon0.querySelector('use'); if(u) u.setAttribute('href', href); }
         if (lbl0) lbl0.textContent = txt;
         if (icon1) { const u = icon1.querySelector('use'); if(u) u.setAttribute('href', href); }
