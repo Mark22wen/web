@@ -3178,9 +3178,15 @@ async function buildBM25Index() {
     try {
         const count = await collection.count();
         if (!count) return;
-        const allData = await collection.get();
-        const docs = allData.documents;
-        if (!docs || !docs.length) return;
+
+        const BATCH = 500;
+        let docs = [];
+        for (let offset = 0; offset < count; offset += BATCH) {
+            const batch = await collection.get({ limit: BATCH, offset });
+            if (batch.documents?.length) docs.push(...batch.documents);
+        }
+
+        if (!docs.length) return;
         bm25Index = new FlexSearch.Index({ tokenize: 'full' });
         docs.forEach((doc, idx) => { bm25Index.add(idx, doc); });
         allDocuments = docs;
@@ -3220,7 +3226,6 @@ async function initVectorStore() {
         console.warn = originalWarn;
     }
 }
-
 // ========== 启动 ==========
 app.listen(PORT, async () => {
     console.log(`🚀 服务启动 → http://localhost:${PORT}`);
