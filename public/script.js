@@ -2271,13 +2271,13 @@ async function clearConversation() {
                 <h2>我是你的数据分析助手</h2>
                 <p>查询数据 · 分析趋势 · 对比地区 · 预测未来<br>所有回答均基于平台数据，附带来源溯源。</p>
                 <div class="rag-welcome-hints">
-                    <button class="rag-hint-btn" onclick="sendRagQuick('近5年工业机器人密度趋势')">
+                    <button class="rag-hint-btn" onclick="sendRagQuick('近5年长江学者数量趋势')">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-trend"/></svg>
-                        近5年工业机器人密度趋势
+                        近5年长江学者趋势
                     </button>
-                    <button class="rag-hint-btn" onclick="sendRagQuick('2023年各省科学支出前10排名')">
+                    <button class="rag-hint-btn" onclick="sendRagQuick('2023年各省杰青数量前10排名')">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
-                        2023年各省科学支出排名
+                        2023年各省杰青排名
                     </button>
                     <button class="rag-hint-btn" onclick="sendRagQuick('预测2026年全国普通高校数量')">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>
@@ -3157,7 +3157,10 @@ function renderMainChart() {
     if (!mainChart || !valueFields.length) return;
     
     let chartType = document.getElementById("chart-type")?.value || "auto";
-    if (chartType === "auto") chartType = (dimType === "nation" ? "line" : "bar");
+    if (chartType === "auto") chartType = (dimType === "nation" ? "area" : "bar");
+    const isArea = chartType === "area" || chartType === "area-stack";
+    const isStack = chartType === "area-stack";
+    const echartsType = isArea ? "line" : chartType;
     
     const metric = valueFields[currentMetricIndex];
     if (!metric) return;
@@ -3201,13 +3204,18 @@ function renderMainChart() {
                 axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
                 splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
             },
-            series: [{ 
-                name: metric, 
-                type: chartType, 
-                data, 
-                smooth: true, 
+            series: [{
+                name: metric,
+                type: echartsType || chartType,
+                data,
+                smooth: true,
                 color: COLORS[0],
-                areaStyle: { 
+                areaStyle: isArea ? {
+                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                        { offset: 0, color: 'rgba(102,126,234,0.45)' },
+                        { offset: 1, color: 'rgba(102,126,234,0.03)' }
+                    ])
+                } : {
                     color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
                         { offset: 0, color: 'rgba(102,126,234,0.3)' },
                         { offset: 1, color: 'rgba(102,126,234,0.05)' }
@@ -3226,13 +3234,20 @@ function renderMainChart() {
             let row = originalRows.find(r => r["年份"] === y && r["地区"] === grp);
             return row ? row[metric] : 0;
         });
-        series.push({ 
-            name: grp, 
-            type: chartType, 
-            data, 
-            smooth: true, 
+        series.push({
+            name: grp,
+            type: echartsType || chartType,
+            data,
+            smooth: true,
             color: COLORS[idx % COLORS.length],
-            areaStyle: chartType === 'line' ? { opacity: 0.1 } : undefined
+            stack: isStack ? 'total' : undefined,
+            areaStyle: isArea ? {
+                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                    { offset: 0, color: COLORS[idx % COLORS.length].replace(')', ',0.4)').replace('rgb', 'rgba') },
+                    { offset: 1, color: COLORS[idx % COLORS.length].replace(')', ',0.02)').replace('rgb', 'rgba') }
+                ]),
+                opacity: isStack ? 0.8 : 0.35
+            } : (chartType === 'line' ? { opacity: 0.1 } : undefined)
         });
     });
     
@@ -4394,7 +4409,10 @@ function renderControls(type) {
     const container = document.getElementById('analysis-controls');
     if (!container) return;
     container.innerHTML = '';
-    
+
+    if (type === 'bubble') { renderBubbleControls(container); return; }
+    if (type === 'butterfly') { renderButterflyControls(container); return; }
+
     if (type === 'scatter') {
         const currentTable = scatterTableMode || (dimType === 'city' ? 'city' : 'province');
         const years = getYears(currentTable);
@@ -4587,6 +4605,188 @@ function dataProcessingNoticeHtml() {
     </div>`;
 }
 
+// ── 查看大图辅助 ──────────────────────────────────────
+function _addViewFullBtn(chartDom, onClick) {
+    const old = chartDom.parentElement?.querySelector('.view-full-btn');
+    if (old) old.remove();
+    const btn = document.createElement('button');
+    btn.className = 'view-full-btn';
+    btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg> 查看大图`;
+    btn.style.cssText = 'margin:6px 0 0 auto;display:flex;align-items:center;gap:4px;font-size:.78rem;color:var(--c-muted);background:none;border:1px solid var(--c-border);border-radius:4px;padding:3px 10px;cursor:pointer;float:right;';
+    btn.onclick = onClick;
+    chartDom.insertAdjacentElement('afterend', btn);
+}
+
+function _openRawEchartsModal(option, title, height = 520) {
+    _getOrCreateModal();
+    const overlay = document.getElementById('chart-modal-overlay');
+    const titleEl = document.getElementById('chart-modal-title');
+    const metaEl  = document.getElementById('chart-modal-meta');
+    const chartEl = document.getElementById('chart-modal-chart');
+    overlay.classList.remove('closing');
+    overlay.style.display = 'flex';
+    if (titleEl) titleEl.textContent = title || '图表详情';
+    if (metaEl)  metaEl.textContent  = '';
+    _chartModalInstance = disposeChartInstance(_chartModalInstance);
+    chartEl.innerHTML = '';
+    chartEl.style.height = height + 'px';
+    chartEl.style.width  = '100%';
+    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
+        _chartModalInstance = echarts.init(chartEl);
+        _chartModalInstance.setOption(option, true);
+    }, 30)));
+}
+
+// ── 气泡图控制器 ──────────────────────────────────────
+function renderBubbleControls(container) {
+    const table   = 'province';
+    const years   = getYears(table);
+    const metrics = getAllMetrics(table);
+    const regions = getAllRegions(table);
+    const defYear = years.includes(2023) ? 2023 : years[years.length - 1];
+    // 默认全选所有省份
+    const selectedBubble = new Set(regions);
+
+    container.innerHTML = `
+        <div class="control-group"><span>年份：</span>
+            <select id="bubble-year">${years.map(y=>`<option value="${y}"${y===defYear?' selected':''}>${y}</option>`).join('')}</select>
+        </div>
+        <div class="control-group"><span>X轴：</span>
+            <select id="bubble-x">${metrics.map((m,i)=>`<option value="${m}"${i===0?' selected':''}>${m}</option>`).join('')}</select>
+        </div>
+        <div class="control-group"><span>Y轴：</span>
+            <select id="bubble-y">${metrics.map((m,i)=>`<option value="${m}"${i===1?' selected':''}>${m}</option>`).join('')}</select>
+        </div>
+        <div class="control-group"><span>气泡大小：</span>
+            <select id="bubble-size">${metrics.map((m,i)=>`<option value="${m}"${i===2?' selected':''}>${m}</option>`).join('')}</select>
+        </div>
+        <div class="scatter-region-section" style="flex:1 1 100%;margin-top:6px;">
+            <div class="scatter-region-header" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                <span class="scatter-region-label">地区</span>
+                <input id="bubble-region-search" class="scatter-search-input" type="text" placeholder="搜索省份">
+                <button type="button" class="scatter-tag-action" id="bubble-select-all">全选</button>
+                <button type="button" class="scatter-tag-action ghost" id="bubble-clear-all">清空</button>
+            </div>
+            <div class="scatter-region-chips" id="bubble-region-chips"></div>
+            <select id="bubble-regions" multiple style="display:none"></select>
+            <div class="scatter-selected-summary" id="bubble-region-summary"></div>
+        </div>
+        <button class="action-btn" onclick="loadChart('bubble')" style="margin-top:8px">生成气泡图</button>`;
+
+    // 渲染芯片
+    function syncBubbleHidden() {
+        const sel = document.getElementById('bubble-regions');
+        if (!sel) return;
+        sel.innerHTML = [...selectedBubble].map(r=>`<option value="${r}" selected>${r}</option>`).join('');
+        const sum = document.getElementById('bubble-region-summary');
+        if (sum) sum.textContent = `已选 ${selectedBubble.size} / ${regions.length} 个地区`;
+    }
+    function renderBubbleChips() {
+        const kw = (document.getElementById('bubble-region-search')?.value||'').trim().toLowerCase();
+        const chips = document.getElementById('bubble-region-chips');
+        if (!chips) return;
+        chips.innerHTML = '';
+        regions.filter(r => !kw || r.includes(kw)).forEach(r => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'region-chip' + (selectedBubble.has(r) ? ' active' : '');
+            btn.textContent = r;
+            btn.onclick = () => {
+                selectedBubble.has(r) ? selectedBubble.delete(r) : selectedBubble.add(r);
+                btn.classList.toggle('active', selectedBubble.has(r));
+                syncBubbleHidden();
+            };
+            chips.appendChild(btn);
+        });
+        syncBubbleHidden();
+    }
+    renderBubbleChips();
+    document.getElementById('bubble-region-search')?.addEventListener('input', renderBubbleChips);
+    document.getElementById('bubble-select-all')?.addEventListener('click', () => { regions.forEach(r=>selectedBubble.add(r)); renderBubbleChips(); });
+    document.getElementById('bubble-clear-all')?.addEventListener('click', () => { selectedBubble.clear(); renderBubbleChips(); });
+}
+
+// ── 蝴蝶图控制器 ──────────────────────────────────────
+function renderButterflyControls(container) {
+    const years   = getYears('province');
+    const metrics = getAllMetrics('province');
+    const regions = getAllRegions('province');
+    const defYear = years.includes(2023) ? 2023 : years[years.length - 1];
+    const defA = regions[0] || '广东省';
+    const defB = regions[1] || '江苏省';
+
+    container.innerHTML = `
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;">
+            <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+                <div class="control-group"><span>年份：</span>
+                    <select id="butterfly-year">${years.map(y=>`<option value="${y}"${y===defYear?' selected':''}>${y}</option>`).join('')}</select>
+                </div>
+                <div class="control-group"><span>省份A（左）：</span>
+                    <select id="butterfly-a">${regions.map(r=>`<option value="${r}"${r===defA?' selected':''}>${r}</option>`).join('')}</select>
+                </div>
+                <div class="control-group"><span>省份B（右）：</span>
+                    <select id="butterfly-b">${regions.map(r=>`<option value="${r}"${r===defB?' selected':''}>${r}</option>`).join('')}</select>
+                </div>
+                <button class="action-btn" onclick="loadChart('butterfly')">生成蝴蝶图</button>
+            </div>
+            <div style="flex:1 1 100%;margin-top:4px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <span style="font-size:.82rem;color:var(--c-text2);font-weight:600;">选择对比指标</span>
+                    <button type="button" class="scatter-tag-action" id="bf-select-all">全选</button>
+                    <button type="button" class="scatter-tag-action ghost" id="bf-clear-all">清空</button>
+                    <button type="button" class="scatter-tag-action ghost" id="bf-top10">差异最大前10</button>
+                </div>
+                <div class="scatter-region-chips" id="butterfly-metric-chips" style="max-height:160px;"></div>
+                <select id="butterfly-metrics" multiple style="display:none"></select>
+            </div>
+        </div>`;
+
+    const selectedBF = new Set(metrics.slice(0, 10));
+    function syncBFHidden() {
+        const sel = document.getElementById('butterfly-metrics');
+        if (sel) sel.innerHTML = [...selectedBF].map(m=>`<option value="${m}" selected>${m}</option>`).join('');
+    }
+    function renderBFChips() {
+        const chips = document.getElementById('butterfly-metric-chips');
+        if (!chips) return;
+        chips.innerHTML = '';
+        metrics.forEach(m => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'region-chip' + (selectedBF.has(m) ? ' active' : '');
+            btn.textContent = m;
+            btn.title = m;
+            btn.onclick = () => { selectedBF.has(m)?selectedBF.delete(m):selectedBF.add(m); btn.classList.toggle('active',selectedBF.has(m)); syncBFHidden(); };
+            chips.appendChild(btn);
+        });
+        syncBFHidden();
+    }
+    renderBFChips();
+    document.getElementById('bf-select-all')?.addEventListener('click', () => { metrics.forEach(m=>selectedBF.add(m)); renderBFChips(); });
+    document.getElementById('bf-clear-all')?.addEventListener('click', () => { selectedBF.clear(); renderBFChips(); });
+    document.getElementById('bf-top10')?.addEventListener('click', () => {
+        // 根据当前选择的两省和年份计算差异最大的10个指标
+        const year = parseInt(document.getElementById('butterfly-year')?.value)||defYear;
+        const regA = document.getElementById('butterfly-a')?.value||defA;
+        const regB = document.getElementById('butterfly-b')?.value||defB;
+        const rowA = (window.workbook?.['省份']||[]).find(r=>r['年份']===year&&r['地区']===regA);
+        const rowB = (window.workbook?.['省份']||[]).find(r=>r['年份']===year&&r['地区']===regB);
+        if (rowA && rowB) {
+            const ranked = metrics.map(m => {
+                const a=rowA[m],b=rowB[m];
+                if (a==null||b==null||isNaN(a)||isNaN(b)) return {m,diff:0};
+                const mx=Math.max(Math.abs(a),Math.abs(b),1e-9);
+                return {m,diff:Math.abs(a/mx-b/mx)};
+            }).sort((x,y)=>y.diff-x.diff);
+            selectedBF.clear();
+            ranked.slice(0,10).forEach(({m})=>selectedBF.add(m));
+        } else {
+            selectedBF.clear(); metrics.slice(0,10).forEach(m=>selectedBF.add(m));
+        }
+        renderBFChips();
+    });
+}
+
 function dataProcessingNoticeHtmlLegacyUnused() {
     return `<div class="data-processing-notice">
         <span>数据提示</span>
@@ -4605,7 +4805,108 @@ async function loadChart(type) {
     const chartDom = document.getElementById('analysis-chart');
     if (!chartDom) return;
     currentChartInstance = disposeChartInstance(currentChartInstance);
-    
+
+    // ── 气泡图 ────────────────────────────────────────
+    if (type === 'bubble') {
+        const year    = parseInt(document.getElementById('bubble-year')?.value) || 2023;
+        const xMetric = document.getElementById('bubble-x')?.value;
+        const yMetric = document.getElementById('bubble-y')?.value;
+        const sMetric = document.getElementById('bubble-size')?.value;
+        const selRegs = Array.from(document.getElementById('bubble-regions')?.selectedOptions || []).map(o => o.value);
+        if (!xMetric || !yMetric || !sMetric) { showToast('请选择三个指标', 'warn'); return; }
+        if (!selRegs.length) { showToast('请至少选择一个地区', 'warn'); return; }
+        const rows = (window.workbook?.['省份'] || []).filter(r => r['年份'] === year && selRegs.includes(r['地区']));
+        const points = rows.map(r => ({
+            name: r['地区'], x: r[xMetric], y: r[yMetric], s: r[sMetric]
+        })).filter(p => p.x != null && p.y != null && p.s != null);
+        if (!points.length) { showToast('所选条件无数据', 'warn'); return; }
+        const sVals = points.map(p => p.s);
+        const sMin = Math.min(...sVals), sMax = Math.max(...sVals);
+        const isDark = document.body.classList.contains('dark-mode');
+        chartDom.style.height = '500px';
+        currentChartInstance = initEChartSafe(chartDom);
+        const bubbleOption = {
+            backgroundColor: 'transparent',
+            title: { text: `${year}年  ${xMetric} · ${yMetric} · ${sMetric}`, left: 'center', textStyle: { color: isDark?'#f7fafc':'#1f2b48', fontSize: 13 } },
+            tooltip: { formatter: p => `<b>${p.data[3]}</b><br/>${xMetric}: ${(+p.data[0])?.toFixed(4)}<br/>${yMetric}: ${(+p.data[1])?.toFixed(4)}<br/>${sMetric}: ${(+p.data[2])?.toFixed(4)}` },
+            xAxis: { name: xMetric, nameLocation: 'middle', nameGap: 30, axisLabel: { color: isDark?'#dbeafe':'#263b59' }, splitLine: { lineStyle: { color: isDark?'#334766':'#d8e1ec', type:'dashed' } } },
+            yAxis: { name: yMetric, nameLocation: 'middle', nameGap: 44, axisLabel: { color: isDark?'#dbeafe':'#263b59' }, splitLine: { lineStyle: { color: isDark?'#334766':'#d8e1ec', type:'dashed' } } },
+            series: [{
+                type: 'scatter',
+                data: points.map(p => [p.x, p.y, p.s, p.name]),
+                symbolSize: val => { const r = sMax===sMin ? 0.5 : (val[2]-sMin)/(sMax-sMin); return 14 + r*50; },
+                itemStyle: { color: p => COLORS[p.dataIndex % COLORS.length], opacity: 0.82 },
+                label: { show: true, formatter: p => p.data[3], position: 'top', fontSize: 11, color: isDark?'#dbeafe':'#263b59' }
+            }]
+        };
+        currentChartInstance.setOption(bubbleOption, true);
+        // 查看大图按钮
+        _addViewFullBtn(chartDom, () => _openRawEchartsModal(bubbleOption, `气泡图 · ${year}年`));
+        return;
+    }
+
+    // ── 蝴蝶图 ────────────────────────────────────────
+    if (type === 'butterfly') {
+        const year  = parseInt(document.getElementById('butterfly-year')?.value) || 2023;
+        const regA  = document.getElementById('butterfly-a')?.value;
+        const regB  = document.getElementById('butterfly-b')?.value;
+        const selMetrics = Array.from(document.getElementById('butterfly-metrics')?.selectedOptions || []).map(o => o.value);
+        const rowA  = (window.workbook?.['省份'] || []).find(r => r['年份'] === year && r['地区'] === regA);
+        const rowB  = (window.workbook?.['省份'] || []).find(r => r['年份'] === year && r['地区'] === regB);
+        if (!rowA || !rowB) { showToast('未找到所选省份数据', 'warn'); return; }
+        if (!selMetrics.length) { showToast('请至少选择一个指标', 'warn'); return; }
+        const pairs = selMetrics.map(m => {
+            const a = rowA[m], b = rowB[m];
+            if (a == null || b == null || isNaN(a) || isNaN(b)) return null;
+            const mx = Math.max(Math.abs(a), Math.abs(b), 1e-9);
+            return { m, a: a/mx, b: b/mx, rawA: a, rawB: b };
+        }).filter(Boolean);
+        if (!pairs.length) { showToast('所选指标无有效数据', 'warn'); return; }
+        const labels = pairs.map(p => p.m.length > 14 ? p.m.slice(0,14)+'…' : p.m);
+        const isDark = document.body.classList.contains('dark-mode');
+        // 动态高度：每行 36px，最少 400px
+        const chartH = Math.max(400, pairs.length * 36 + 120);
+        chartDom.style.height = chartH + 'px';
+        currentChartInstance = initEChartSafe(chartDom);
+        const bfOption = {
+            backgroundColor: 'transparent',
+            title: { text: `${year}年  ${regA} vs ${regB}  指标对比`, left: 'center', textStyle: { color: isDark?'#f7fafc':'#1f2b48', fontSize: 13 } },
+            tooltip: {
+                trigger: 'axis', axisPointer: { type: 'shadow' },
+                formatter: params => {
+                    const i = params[0]?.dataIndex, p = pairs[i];
+                    return p ? `<b>${p.m}</b><br/>${regA}: ${p.rawA?.toFixed(4)}<br/>${regB}: ${p.rawB?.toFixed(4)}` : '';
+                }
+            },
+            legend: { data: [regA, regB], top: 28, textStyle: { color: isDark?'#dbeafe':'#263b59' } },
+            grid: { left: 20, right: 20, top: 62, bottom: 16, containLabel: true },
+            xAxis: {
+                type: 'value',
+                axisLabel: { formatter: v => Math.abs(v).toFixed(2), color: isDark?'#dbeafe':'#263b59', fontSize: 11 },
+                splitLine: { lineStyle: { color: isDark?'#334766':'#d8e1ec', type:'dashed' } }
+            },
+            yAxis: { type: 'category', data: labels, axisLabel: { color: isDark?'#dbeafe':'#263b59', fontSize: 11, width: 110, overflow:'truncate' } },
+            series: [
+                {
+                    name: regA, type: 'bar', stack: 'total',
+                    data: pairs.map(p => -Math.abs(p.a)),
+                    itemStyle: { color: COLORS[0], opacity: 0.85 },
+                    label: { show: true, position: 'insideLeft', formatter: p => pairs[p.dataIndex]?.rawA?.toFixed(3), color: '#fff', fontSize: 10 }
+                },
+                {
+                    name: regB, type: 'bar', stack: 'total',
+                    data: pairs.map(p => Math.abs(p.b)),
+                    itemStyle: { color: COLORS[2], opacity: 0.85 },
+                    label: { show: true, position: 'insideRight', formatter: p => pairs[p.dataIndex]?.rawB?.toFixed(3), color: '#fff', fontSize: 10 }
+                }
+            ]
+        };
+        currentChartInstance.setOption(bfOption, true);
+        // 查看大图按钮
+        _addViewFullBtn(chartDom, () => _openRawEchartsModal(bfOption, `蝴蝶图 · ${year}年 ${regA} vs ${regB}`, Math.max(600, chartH)));
+        return;
+    }
+
     if (type === 'scatter') {
         const table = document.getElementById('scatter-table')?.value || 'province';
         const year = parseInt(document.getElementById('scatter-year')?.value) || 2023;
@@ -4844,7 +5145,11 @@ function openAnalysisPanel(type) {
     }
     
     activeChart = type;
-    const titleMap = { scatter: '散点图 — 双指标关联分析' };
+    const titleMap = {
+        scatter:   '散点图 — 双指标关联分析',
+        bubble:    '气泡图 — 三维联合分析',
+        butterfly: '蝴蝶图 — 双省指标对比'
+    };
     const titleEl = document.getElementById('panel-title');
     if (titleEl) titleEl.innerText = titleMap[type] || type;
     

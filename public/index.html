@@ -154,7 +154,7 @@
         </div>
         <div class="star-orbit-card star-card-b">
             <span>指标体系</span>
-            <strong>19</strong>
+            <strong>71</strong>
         </div>
         <div class="star-orbit-card star-card-c">
             <span>预测研判</span>
@@ -248,15 +248,15 @@
             <div class="hero-search-section">
                 <div class="hero-search">
                     <svg class="search-prefix-icon" width="18" height="18"><use href="#ico-search"/></svg>
-                    <input id="landing-query" class="hero-input" placeholder="试试：近5年工业机器人密度趋势..."/>
+                    <input id="landing-query" class="hero-input" placeholder="试试：2023年各省长江学者数量排名..."/>
                     <button class="hero-send-btn" onclick="enterDashboardWithQuery()">
                         <svg width="18" height="18"><use href="#ico-arrow-right"/></svg>
                     </button>
                 </div>
                 <div class="hero-chips">
-                    <button class="chip" onclick="setLandingQuery('近5年工业机器人密度趋势')">
+                    <button class="chip" onclick="setLandingQuery('近5年长江学者数量趋势')">
                         <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-trend"/></svg>
-                        工业机器人趋势
+                        长江学者趋势
                     </button>
                     <button class="chip" onclick="setLandingQuery('预测2026年普通高校数量')">
                         <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-star"/></svg>
@@ -266,9 +266,9 @@
                         <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-chart-bar"/></svg>
                         省份对比
                     </button>
-                    <button class="chip" onclick="setLandingQuery('2023年各省科学支出排名')">
+                    <button class="chip" onclick="setLandingQuery('2023年各省杰青数量排名')">
                         <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-db"/></svg>
-                        科学支出排名
+                        杰青排名
                     </button>
                 </div>
             </div>
@@ -627,7 +627,7 @@
                         <label>类型</label>
                         <select id="chart-type">
                             <option value="auto">智能</option>
-                            <option value="line">折线</option>
+                            <option value="area">面积</option>
                             <option value="bar">柱状</option>
                         </select>
                     </div>
@@ -750,26 +750,59 @@
         <div id="section-scatter" style="display:none;">
             <div class="section-divider">
                 <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-scatter"/></svg>
-                散点图分析
+                高级图表分析
             </div>
             <div class="analysis-cards-row">
+
+                <!-- 气泡图 -->
+                <div class="analysis-card-entry" data-chart="bubble">
+                    <div class="ace-icon-wrap" style="background:linear-gradient(135deg,#6366f1,#8b5cf6)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><circle cx="7" cy="14" r="4"/><circle cx="16" cy="9" r="6"/><circle cx="19" cy="19" r="2"/></svg>
+                    </div>
+                    <div class="ace-body">
+                        <div class="ace-title">气泡图·三维联合分析</div>
+                        <div class="ace-desc">X轴、Y轴、气泡大小分别对应三个指标，揭示地区间多维关联</div>
+                    </div>
+                    <button class="ace-btn analysis-toggle-btn" type="button" data-chart="bubble" aria-expanded="false">
+                        <span>展开分析</span>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#ico-arrow-right"/></svg>
+                    </button>
+                </div>
+
+                <!-- 散点图 -->
                 <div class="analysis-card-entry" data-chart="scatter">
                     <div class="ace-icon-wrap">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-scatter"/></svg>
                     </div>
                     <div class="ace-body">
-                        <div class="ace-title">双指标关联散点图</div>
-                        <div class="ace-desc">选择两个指标，分析地区间的相关性</div>
+                        <div class="ace-title">散点图·双指标关联</div>
+                        <div class="ace-desc">选择两个指标，分析地区间的相关性与分布</div>
                     </div>
                     <button class="ace-btn analysis-toggle-btn" type="button" data-chart="scatter" aria-expanded="false">
                         <span>展开分析</span>
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#ico-arrow-right"/></svg>
                     </button>
                 </div>
+
+                <!-- 蝴蝶图 -->
+                <div class="analysis-card-entry" data-chart="butterfly">
+                    <div class="ace-icon-wrap" style="background:linear-gradient(135deg,#0ea5e9,#06b6d4)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 3v18M3 8h8M3 12h7M3 16h6M13 8h8M14 12h7M15 16h6"/></svg>
+                    </div>
+                    <div class="ace-body">
+                        <div class="ace-title">蝴蝶图·双省对比</div>
+                        <div class="ace-desc">选择两个省份，左右对称展示各指标差异，一眼看出强弱</div>
+                    </div>
+                    <button class="ace-btn analysis-toggle-btn" type="button" data-chart="butterfly" aria-expanded="false">
+                        <span>展开分析</span>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#ico-arrow-right"/></svg>
+                    </button>
+                </div>
+
             </div>
             <div id="analysis-panel" style="display:none;">
                 <div class="analysis-panel-header">
-                    <span id="panel-title">散点图分析</span>
+                    <span id="panel-title">图表分析</span>
                     <div class="analysis-panel-actions">
                         <span class="export-label">导出</span>
                         <button id="export-chart-png" class="mini-btn">PNG</button>
@@ -849,6 +882,91 @@
             </div>
         </div>
 
+        <!-- ===== 相关数据资源链接区 ===== -->
+        <section class="res-links-section">
+            <div class="res-links-header">
+                <span class="res-links-title-bar"></span>
+                <h3 class="res-links-title">人才数据资源索引</h3>
+                <span class="res-links-subtitle">权威来源 · 原始名单 · 公开数据</span>
+            </div>
+            <div class="res-links-grid">
+
+                <!-- 列1：科技奖项 -->
+                <div class="res-links-col">
+                    <div class="res-col-header">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                        科技奖项
+                    </div>
+                    <ul class="res-link-list">
+                        <li><a href="https://www.most.gov.cn/ztzl/kjrw/" target="_blank" rel="noopener">国家最高科技奖获得者</a></li>
+                        <li><a href="https://casad.cas.cn/ysxx2022/ysmd/qtys/" target="_blank" rel="noopener">中科院院士名单</a></li>
+                        <li><a href="https://www.cae.cn/cae/html/main/col48/column_48_1.html" target="_blank" rel="noopener">工程院院士名单</a></li>
+                        <li><a href="https://www.hlhl.org.cn/channels/2.html" target="_blank" rel="noopener">何梁何利基金奖</a></li>
+                        <li><a href="https://www.cae.cn/cae/html/main/col143/2025-03/11/20250311095509882806959_1.html" target="_blank" rel="noopener">光华工程科技奖</a></li>
+                        <li><a href="https://www.cast.org.cn/rc2/bzytj/qgcxzxj/ljhjz/art/2025/art_4dcd06a6a69e47f8b7fcc0f650a82815.html" target="_blank" rel="noopener">全国创新争先奖</a></li>
+                        <li><a href="https://www.gov.cn/zhengce/202401/content_6927128.htm" target="_blank" rel="noopener">国家工程师奖</a></li>
+                    </ul>
+                </div>
+
+                <!-- 列2：人才计划 -->
+                <div class="res-links-col">
+                    <div class="res-col-header">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                        人才计划
+                    </div>
+                    <ul class="res-link-list">
+                        <li><a href="/资料/PDF名单/历年长江学者(1998-2017).pdf" target="_blank" rel="noopener">长江学者（1998-2017）</a></li>
+                        <li><a href="https://m.thepaper.cn/baijiahao_32132431" target="_blank" rel="noopener">杰青·2025年</a></li>
+                        <li><a href="https://mp.weixin.qq.com/s/D06X0t9J_4gmEFr2j37gmg" target="_blank" rel="noopener">杰青·2020-2024年</a></li>
+                        <li><a href="https://mp.weixin.qq.com/s/D06X0t9J_4gmEFr2j37gmg" target="_blank" rel="noopener">优青·2020-2024年</a></li>
+                        <li><a href="https://news.sciencenet.cn/htmlnews/2013/1/273773.shtm" target="_blank" rel="noopener">万人领军·第一批</a></li>
+                        <li><a href="https://wap.sciencenet.cn/mobile.php?type=detail&id=349271&mobile=1" target="_blank" rel="noopener">万人领军·第二批</a></li>
+                        <li><a href="https://www.163.com/dy/article/D6S9GGNE0517DHAI.html" target="_blank" rel="noopener">万人领军·第三批</a></li>
+                        <li><a href="https://www.163.com/dy/article/E8VU7AMT05366EUH.html" target="_blank" rel="noopener">万人领军·第四批</a></li>
+                        <li><a href="https://k.sina.cn/article_5359069294_13f6ce86e034001w1j.html" target="_blank" rel="noopener">万人青拔·第三批</a></li>
+                    </ul>
+                </div>
+
+                <!-- 列3：中国科协青年人才托举 -->
+                <div class="res-links-col">
+                    <div class="res-col-header">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                        中国科协青年人才托举
+                    </div>
+                    <ul class="res-link-list">
+                        <li><a href="https://www.instrument.com.cn/news/20160303/185436.shtml" target="_blank" rel="noopener">第一届</a></li>
+                        <li><a href="https://www.nsfc.gov.cn/csc/20340/20289/20775/index.html" target="_blank" rel="noopener">第三届</a></li>
+                        <li><a href="http://www.caass.org.cn/xbnxh/zt/qnrctjgc/xmdt5/74975/2020061216111425851.pdf" target="_blank" rel="noopener">第四届</a></li>
+                        <li><a href="https://www.cstcs.org.cn/upload/files/2020/8/d9a588d2ac12bf51.pdf" target="_blank" rel="noopener">第五届</a></li>
+                        <li><a href="/资料/PDF名单/第六届中国科协青年人才托举工程人选名单.pdf" target="_blank" rel="noopener">第六届</a></li>
+                        <li><a href="/资料/PDF名单/第七届中国科协青年人才托举工程人选名单.pdf" target="_blank" rel="noopener">第七届</a></li>
+                        <li><a href="/资料/PDF名单/第八届中国科协青年人才托举工程人选名单.pdf" target="_blank" rel="noopener">第八届</a></li>
+                        <li><a href="https://www.culss.org.cn/index.php?m=content&c=index&a=show&catid=47&id=353" target="_blank" rel="noopener">第九届</a></li>
+                        <li><a href="https://www.cpma.org.cn/zhyfyxh/tzgg/202412/4d7f13bc38c74c4cb7c3bc0de9b298f5.shtml" target="_blank" rel="noopener">第十届</a></li>
+                    </ul>
+                </div>
+
+                <!-- 列4：博士后创新人才支持计划 -->
+                <div class="res-links-col">
+                    <div class="res-col-header">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                        博士后创新人才支持计划
+                    </div>
+                    <ul class="res-link-list">
+                        <li><a href="/资料/PDF名单/2024年度博士后创新人才支持计划获选人员名单.pdf" target="_blank" rel="noopener">2024年</a></li>
+                        <li><a href="/资料/PDF名单/2023年度博士后创新人才支持计划获选人员名单.pdf" target="_blank" rel="noopener">2023年</a></li>
+                        <li><a href="/资料/PDF名单/2022年度博士后创新人才支持计划获选人员名单.pdf" target="_blank" rel="noopener">2022年</a></li>
+                        <li><a href="/资料/PDF名单/2021年度博士后创新人才支持计划.pdf" target="_blank" rel="noopener">2021年</a></li>
+                        <li><a href="/资料/PDF名单/2020年度博士后创新人才支持计划获选人员名单.pdf" target="_blank" rel="noopener">2020年</a></li>
+                        <li><a href="/资料/PDF名单/2018年度%E2%80%9C博士后创新人才支持计划%E2%80%9D获选人员名单.pdf" target="_blank" rel="noopener">2018年</a></li>
+                        <li><a href="https://www.acabridge.cn/news/201705/t20170517_1516981.shtml" target="_blank" rel="noopener">2017年</a></li>
+                        <li><a href="https://www.edu.cn/rd/gai_kuang/xin_wen_gong_gao/201608/t20160822_1441413.shtml" target="_blank" rel="noopener">2016年</a></li>
+                    </ul>
+                </div>
+
+            </div>
+        </section>
+
         <footer class="dash-footer">© 山东财经大学 科研教育人才一体化平台 · 数据来源：公开统计数据库</footer>
     </div>
 
@@ -890,13 +1008,13 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>
                 快捷提问
             </div>
-            <button class="quick-q" onclick="sendRagQuick('2023年各省科学支出排名')">
+            <button class="quick-q" onclick="sendRagQuick('2023年各省长江学者数量排名')">
                 <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
-                2023年科学支出排名
+                2023年长江学者排名
             </button>
-            <button class="quick-q" onclick="sendRagQuick('近5年工业机器人密度趋势')">
+            <button class="quick-q" onclick="sendRagQuick('近5年杰青数量趋势')">
                 <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-trend"/></svg>
-                工业机器人趋势
+                杰青趋势
             </button>
             <button class="quick-q" onclick="sendRagQuick('预测2026年普通高校数量')">
                 <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>
@@ -947,13 +1065,13 @@
                 <h2>我是你的数据分析助手</h2>
                 <p>查询数据 · 分析趋势 · 对比地区 · 预测未来<br>所有回答均基于平台数据，附带来源溯源。</p>
                 <div class="rag-welcome-hints">
-                    <button class="rag-hint-btn" onclick="sendRagQuick('近5年工业机器人密度趋势')">
+                    <button class="rag-hint-btn" onclick="sendRagQuick('近5年长江学者数量趋势')">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-trend"/></svg>
-                        近5年工业机器人密度趋势
+                        近5年长江学者趋势
                     </button>
-                    <button class="rag-hint-btn" onclick="sendRagQuick('2023年各省科学支出前10排名')">
+                    <button class="rag-hint-btn" onclick="sendRagQuick('2023年各省杰青数量前10排名')">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
-                        2023年各省科学支出排名
+                        2023年各省杰青排名
                     </button>
                     <button class="rag-hint-btn" onclick="sendRagQuick('预测2026年全国普通高校数量')">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>

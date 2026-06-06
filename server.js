@@ -395,7 +395,7 @@ function buildRelevantMetricSnapshot(row, question = '', entities = {}, maxMetri
 }
 
 function isAllMetricDetailQuestion(question = '') {
-    return /(各项指标|各项数据|各指标|全部指标|所有指标|全部数据|所有数据|完整指标|指标明细|指标详情|19项指标)/.test(String(question));
+    return /(各项指标|各项数据|各指标|全部指标|所有指标|全部数据|所有数据|完整指标|指标明细|指标详情|\d+项指标)/.test(String(question));
 }
 
 function isPartialMetricDetailQuestion(question = '', entities = {}) {
