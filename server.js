@@ -1021,26 +1021,49 @@ ${histText}
 
 function inferMetric(text) {
     const synonymGroups = [
-        { keys: ['教育水平', '高校', '大学', '高等教育', '学校'], metrics: ['普通高校数量', 'R&D经费投入强度'] },
-        { keys: ['人工智能普及', '智能化', 'ai普及', 'AI普及', '人工智能'], metrics: ['人工智能应用水平', '工业机器人密度'] },
-        { keys: ['创新能力', '专利', '发明', '知识产权'], metrics: ['发明专利授予数', '实用新型专利申请授权数'] },
-        { keys: ['数字化', '互联网', '网络普及'], metrics: ['互联网普及度'] },
-        { keys: ['科研投入', '研发投入', 'R&D', '研发'], metrics: ['R&D经费投入强度', '科学支出水平'] }
+        // 人才称号类（新增）
+        { keys: ['长江学者', '长江'], metrics: ['长江学者'] },
+        { keys: ['杰青', '杰出青年'], metrics: ['杰青'] },
+        { keys: ['优青', '优秀青年'], metrics: ['优青'] },
+        { keys: ['万人领军', '万人计划', '领军人才'], metrics: ['万人领军'] },
+        { keys: ['万人青拔', '青年拔尖'], metrics: ['万人青拔'] },
+        { keys: ['博士后', '博创'], metrics: ['博士后创新人才支持计划'] },
+        { keys: ['科协托举', '青年人才托举'], metrics: ['中国科协青年人才托举工程'] },
+        { keys: ['国家工程师'], metrics: ['国家卓越工程师奖'] },
+        // 科技创新类
+        { keys: ['人工智能', '智能化', 'AI', 'ai'], metrics: ['人工智能应用水平', '工业机器人密度'] },
+        { keys: ['机器人', '工业机器人'], metrics: ['工业机器人密度'] },
+        { keys: ['专利', '发明专利', '知识产权'], metrics: ['发明专利授予数', '实用新型专利申请授权数'] },
+        { keys: ['科研投入', '研发投入', 'R&D', '研发经费'], metrics: ['科研经费投入强度', '科学支出水平'] },
+        { keys: ['科技人员', '研发人员', 'R&D人员'], metrics: ['科技人员投入强度', 'R&D人员/年末从业人员数'] },
+        { keys: ['技术市场', '成果转化'], metrics: ['技术市场活跃度', '技术市场交易额/万元'] },
+        // 教育类
+        { keys: ['高校', '大学', '高等教育', '教育水平'], metrics: ['普通高校数量', '万人大学生数'] },
+        { keys: ['受教育', '教育年限'], metrics: ['人均受教育年限'] },
+        { keys: ['教育支出', '教育经费'], metrics: ['教育支出水平', '生均教育经费支出'] },
+        { keys: ['中小学', '基础教育'], metrics: ['中小学学校数量'] },
+        // 数字化类
+        { keys: ['互联网', '网络普及', '数字化'], metrics: ['互联网普及度', '电信业务总量'] },
+        { keys: ['信息技术', 'IT', '软件'], metrics: ['信息技术人才', '信息传输计算机软件业从业人员数/年末从业人员数'] },
+        // 人力资本类
+        { keys: ['人力资本', '人才密度', '人才水平'], metrics: ['人力资本水平', '人才人口密度'] },
+        { keys: ['高级职称', '职称'], metrics: ['高级职称人才占人口比例'] },
+        { keys: ['产业结构', '产业升级'], metrics: ['产业结构高级化', '产业结构指数'] },
+        // 科研产出类
+        { keys: ['论文', '发表论文', '科技论文'], metrics: ['普通高校发表论文数', '人才平均科技论文'] },
+        { keys: ['科研成果', '成果'], metrics: ['人才平均科技成果', '科研经费利用效果'] },
     ];
     for (const group of synonymGroups) {
         if (group.keys.some(k => text.includes(k))) {
             for (const name of group.metrics) {
-                const matched = metricNameList.find(m => m.includes(name) || cleanMetricName(m).includes(name));
+                const matched = metricNameList.find(m =>
+                    m === name || cleanMetricName(m) === cleanMetricName(name) ||
+                    m.includes(name) || cleanMetricName(m).includes(cleanMetricName(name))
+                );
                 if (matched) return matched;
             }
         }
     }
-    if (text.includes('机器人')) return metricNameList.find(m => m.includes('机器人')) || '工业机器人密度';
-    if (text.includes('科学') || text.includes('支出')) return metricNameList.find(m => m.includes('科学')) || '科学支出水平';
-    if (text.includes('专利')) return metricNameList.find(m => m.includes('专利')) || '实用新型专利申请授权数';
-    if (text.includes('互联网') || text.includes('普及')) return metricNameList.find(m => m.includes('互联网')) || '互联网普及度';
-    if (text.includes('高校') || text.includes('大学')) return metricNameList.find(m => m.includes('高校')) || '普通高校数量';
-    if (text.includes('R&D') || text.includes('研发')) return metricNameList.find(m => m.includes('R&D') || m.includes('研发')) || 'R&D经费投入强度';
     return metricNameList[0] || '科学支出水平';
 }
 
@@ -1051,11 +1074,13 @@ function expandQueryForRetrieval(question, entities = {}) {
     for (const r of entities.regions || []) additions.push(r);
     for (const y of entities.years || []) additions.push(String(y));
     const synonymHints = [
-        ['教育水平', '普通高校数量 人均受教育年限 教育支出水平 万人大学生数'],
-        ['人工智能', '人工智能应用水平 工业机器人密度 互联网普及度'],
-        ['创新', '发明专利授予数 实用新型专利申请授权数 R&D 科学支出水平'],
-        ['数字化', '互联网普及度 信息传输计算机软件业'],
-        ['科研', 'R&D人员 科学支出水平 科研综合技术服务业']
+        ['教育',     '普通高校数量 人均受教育年限 教育支出水平 万人大学生数 中小学学校数量 生均教育经费支出'],
+        ['人工智能', '人工智能应用水平 工业机器人密度 互联网普及度 信息技术人才'],
+        ['创新',     '发明专利授予数 实用新型专利申请授权数 科研经费投入强度 技术市场活跃度'],
+        ['数字化',   '互联网普及度 电信业务总量 信息传输计算机软件业从业人员数/年末从业人员数'],
+        ['科研',     '科研经费投入强度 科技人员投入强度 R&D人员/年末从业人员数 普通高校发表论文数'],
+        ['人才',     '人力资本水平 人才人口密度 高级职称人才占人口比例 长江学者 杰青 优青 万人领军'],
+        ['产业',     '产业结构高级化 产业结构指数 全员劳动生产率 新产品销售收入'],
     ];
     for (const [key, value] of synonymHints) {
         if (String(question).includes(key)) additions.push(value);

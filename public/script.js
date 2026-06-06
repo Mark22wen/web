@@ -2079,8 +2079,6 @@ function _doRenderInlineChart(chartId, config, isModal) {
     console.log('✅ 内联图表渲染完成:', chartId);
 }
 
-// Legacy compat - keep closeAgentModal doing nothing (modal removed)
-function closeAgentModal() {}
 
 // Auto-generate chart - now renders inline
 function autoGenerateChart(question, targetBubble) {
@@ -4787,13 +4785,6 @@ function renderButterflyControls(container) {
     });
 }
 
-function dataProcessingNoticeHtmlLegacyUnused() {
-    return `<div class="data-processing-notice">
-        <span>数据提示</span>
-        当前结果中存在较高重复值，可能经过缺失值处理，请结合数据口径谨慎解读。
-    </div>`;
-}
-
 function dataProcessingNoticeHtml() {
     return `<div class="data-processing-notice">
         <span>数据提示</span>
@@ -5480,36 +5471,6 @@ function dismissToast(toast) {
 }
 
 // ======================= 启动 =======================
-
-// Legacy implementation kept inert; final executeAgentUiActions is defined below.
-function executeAgentUiActionsLegacyUnused(data, question, sourceBubble) {
-    if (!sourceBubble) return;
-    const hasChart = !!(data?.chart && data.chart.metric);
-    const q = String(question || '');
-    const wantsExport = /导出|下载|保存|生成文件|Excel|CSV|PNG|JPG|SVG/i.test(q);
-    const wantsReport = /报告|分析稿|总结文档|生成总结|生成分析/.test(q);
-    if (!hasChart && !wantsExport && !wantsReport) return;
-    if (sourceBubble.querySelector('.agent-ui-actions')) return;
-
-    const actions = [];
-    actions.push({ id: 'open-data-table', label: '查看数据明细' });
-    if (hasChart) actions.push({ id: 'inline-chart', label: '展开图表' });
-    if (hasChart) actions.push({ id: 'export-inline-chart', label: '导出图表 PNG' });
-    if (wantsExport) actions.push({ id: 'export-chat-table', label: '导出回答 CSV' });
-    actions.push({ id: 'report-html', label: '生成报告' });
-
-    const box = document.createElement('div');
-    box.className = 'agent-ui-actions';
-    box._agentData = data;
-    box._agentQuestion = question || '';
-    box.innerHTML = `
-        <div class="agent-ui-action-title">可执行操作</div>
-        <div class="agent-ui-action-row">
-            ${actions.map(action => `<button type="button" class="agent-action-btn" data-agent-action="${action.id}">${escapeHtml(action.label)}</button>`).join('')}
-        </div>
-    `;
-    sourceBubble.appendChild(box);
-}
 
 function executeAgentUiActions(data, question, sourceBubble) {
     if (!sourceBubble) return;
