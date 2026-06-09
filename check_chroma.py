@@ -6,7 +6,7 @@ import requests
 
 CHROMA = "http://localhost:8000/api/v2/tenants/default_tenant/databases/default_database"
 OLLAMA = "http://localhost:11434"
-EMBED_MODEL = "nomic-embed-text"
+EMBED_MODEL = "bge-m3"
 
 def req(method, path, **kw):
     r = requests.request(method, CHROMA + path, timeout=30, **kw)

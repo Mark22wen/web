@@ -9,7 +9,8 @@ knowledge_ingest.py — 把 public/资料/ 下的 PDF / Word / Excel 文档写�
     python knowledge_ingest.py --no-vision      # 跳过 llava 图表识别
 
 依赖：
-    pip install pdfplumber pymupdf python-docx requests openpyxl
+    pip install pymupdf4llm pdfplumber pymupdf python-docx requests openpyxl
+    （pymupdf4llm 为首选，未安装时自动降级到 pdfplumber → pymupdf）
 
 Metadata 字段（每个 chunk）：
     table         : "knowledge"（固定，用于与结构化数据隔离）
@@ -36,7 +37,7 @@ DOCS_FOLDER   = os.path.join(os.path.dirname(__file__), "public", "资料")
 CHROMA_HOST   = os.environ.get("CHROMA_HOST", "localhost")
 CHROMA_PORT   = int(os.environ.get("CHROMA_PORT", "8000"))
 OLLAMA_URL    = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-EMBED_MODEL   = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+EMBED_MODEL   = os.environ.get("OLLAMA_EMBED_MODEL", "bge-m3")
 COLLECTION    = "patent_knowledge"
 TENANT        = "default_tenant"
 DATABASE      = "default_database"
@@ -111,6 +112,14 @@ def chroma_heartbeat():
     requests.get(
         f"http://{CHROMA_HOST}:{CHROMA_PORT}/api/v2/heartbeat", timeout=5
     ).raise_for_status()
+
+def chroma_drop_collection():
+    """删除整个集合（换嵌入模型时用，维度变化必须重建）。"""
+    try:
+        _req("DELETE", _col_url(f"/{COLLECTION}"))
+        print(f"   🗑️  集合 {COLLECTION} 已删除")
+    except Exception as e:
+        print(f"   ⚠️  删除集合失败（可能不存在）: {e}")
 
 def chroma_get_or_create():
     try:
@@ -421,21 +430,41 @@ def is_heading_line(line):
 
 def detect_printed_page(page_text, physical_num):
     """从页面文本中识别印刷页码（页脚/页眉的孤立数字）。
+    支持多种格式：纯数字、— N —、- N -、第N页、N/总页数 等。
     找不到时回退到物理页码。
     """
+    # 从各种格式中提取数字的统一函数
+    _PAGE_PATTERNS = [
+        r'^\d{1,4}$',                          # 纯数字：11
+        r'^[—\-–]+\s*(\d{1,4})\s*[—\-–]+$',   # — 11 — 或 - 11 -
+        r'^第\s*(\d{1,4})\s*页$',               # 第11页
+        r'^(\d{1,4})\s*/\s*\d+$',              # 11/100
+        r'^[Pp]age\s*(\d{1,4})$',              # Page 11
+        r'^(\d{1,4})\s*of\s*\d+$',             # 11 of 100
+    ]
+
+    def extract_num(line):
+        for pat in _PAGE_PATTERNS:
+            m = re.match(pat, line, re.IGNORECASE)
+            if m:
+                # 第一个捕获组有数字就用它，否则用整体匹配（纯数字情况）
+                num_str = m.group(1) if m.lastindex else m.group(0)
+                n = int(num_str)
+                if 1 <= n <= physical_num + 150:
+                    return n
+        return None
+
     lines = [l.strip() for l in page_text.split('\n') if l.strip()]
     # 优先检查最后5行（页脚）
     for line in reversed(lines[-5:] if len(lines) >= 5 else lines):
-        if re.match(r'^\d{1,3}$', line):
-            n = int(line)
-            if 1 <= n <= physical_num + 100:
-                return n
+        n = extract_num(line)
+        if n is not None:
+            return n
     # 再检查前3行（页眉）
     for line in lines[:3]:
-        if re.match(r'^\d{1,3}$', line):
-            n = int(line)
-            if 1 <= n <= physical_num + 100:
-                return n
+        n = extract_num(line)
+        if n is not None:
+            return n
     return physical_num
 
 
@@ -508,39 +537,100 @@ def extract_pdf(path):
     return "\n".join(text for _, text, _ in pages)
 
 
+def _parse_md_headings(md_text, heading_stack):
+    """从 Markdown 文本中解析标题，更新 heading_stack（原地修改）。"""
+    for line in md_text.split('\n'):
+        if line.startswith('#### '):
+            heading_stack[2] = line.lstrip('#').strip()
+        elif line.startswith('### '):
+            heading_stack[2] = line.lstrip('#').strip()
+        elif line.startswith('## '):
+            heading_stack[1] = line.lstrip('#').strip()
+            heading_stack[2] = ''
+        elif line.startswith('# '):
+            heading_stack[0] = line.lstrip('#').strip()
+            heading_stack[1] = ''
+            heading_stack[2] = ''
+
+def _heading_path(stack):
+    return ' > '.join(h for h in stack if h)
+
+
 def extract_pdf_pages(path):
     """按页提取 PDF，返回 [(printed_page_num, text, section_heading), ...].
 
-    处理：
-      - 表格 → Markdown（多级表头压平，避免重复提取）
-      - 正文去掉表格区域（防止内容重复）
-      - 图片页：文字极少时调 llava 识别
-      - 印刷页码识别（复用原始文本，不重复调用）
-      - 章节标题追踪（跨页维持状态，供 chunk 上下文使用）
-      - 文字清洗（连字符换行、孤立页码、多余空行）
-    优先 pdfplumber；回退 pymupdf。
+    优先级：
+      1. pymupdf4llm — 输出结构化 Markdown，标题/表格/多栏布局最准确
+      2. pdfplumber  — 表格提取好，正文可靠
+      3. pymupdf     — 最后兜底
+    所有路径均识别印刷页码、追踪多级章节标题、处理图表页（llava）。
     """
-    # ── pdfplumber ────────────────────────────────────────
+    # ── 1. pymupdf4llm（最优质）────────────────────────────
+    try:
+        import pymupdf4llm
+        import fitz
+
+        doc = fitz.open(path)
+        # page_chunks=True 返回逐页字典列表，每页含 text/metadata/images
+        chunks = pymupdf4llm.to_markdown(doc, page_chunks=True,
+                                         show_progress=False,
+                                         write_images=False)
+        pages = []
+        heading_stack = ['', '', '']
+
+        for idx, chunk in enumerate(chunks):
+            # API 不同版本字段名略有差异，做兼容处理
+            md_text  = chunk.get('text') or chunk.get('markdown') or ''
+            meta     = chunk.get('metadata') or chunk.get('meta') or {}
+            phys_num = meta.get('page', idx) + 1   # 0-indexed → 1-indexed
+
+            # 从 Markdown 标题行更新章节栈
+            _parse_md_headings(md_text, heading_stack)
+
+            # 用 fitz 原始文本做印刷页码识别（pymupdf4llm 不提供）
+            raw_text = doc[phys_num - 1].get_text('text') if phys_num <= len(doc) else ''
+            printed  = detect_printed_page(raw_text, phys_num)
+
+            # 去掉 Markdown 标题符号后清洗
+            clean = clean_page_text(
+                re.sub(r'^#{1,6}\s+', '', md_text, flags=re.MULTILINE)
+            )
+
+            # 图表页：文字极少 → llava
+            img_count = len(doc[phys_num - 1].get_images()) if phys_num <= len(doc) else 0
+            if len(clean) < 80 and img_count and not use_no_vision:
+                print(f'\n   🖼️  第{phys_num}页图表页，调用 llava...', end='', flush=True)
+                img_b64 = render_page_image_b64(path, phys_num)
+                if img_b64:
+                    desc = describe_with_llava(img_b64, clean[:120])
+                    if desc:
+                        clean += '\n' + desc
+                        print(' ✅')
+                    else:
+                        print(' ⚠️')
+
+            if clean:
+                pages.append((printed, clean, _heading_path(heading_stack)))
+
+        doc.close()
+        if pages:
+            return pages
+        # pymupdf4llm 返回空则降级
+    except ImportError:
+        pass   # 未安装，降级
+    except Exception as e:
+        print(f'  ⚠️  pymupdf4llm 失败，降级 pdfplumber: {e}')
+    # ── 2. pdfplumber（回退）─────────────────────────────────
     try:
         import pdfplumber
         pages = []
-        heading_stack = ['', '', '']   # [h1, h2, h3]，跨页维持多级标题状态
+        heading_stack = ['', '', '']
 
         def update_heading_stack(line):
             lv = heading_level(line)
-            if lv == 1:
-                heading_stack[0] = line.strip()
-                heading_stack[1] = ''
-                heading_stack[2] = ''
-            elif lv == 2:
-                heading_stack[1] = line.strip()
-                heading_stack[2] = ''
-            elif lv == 3:
-                heading_stack[2] = line.strip()
-
-        def current_heading_path():
-            parts = [h for h in heading_stack if h]
-            return ' > '.join(parts)
+            if lv == 1:   heading_stack[0] = line.strip(); heading_stack[1] = ''; heading_stack[2] = ''
+            elif lv == 2: heading_stack[1] = line.strip(); heading_stack[2] = ''
+            elif lv == 3: heading_stack[2] = line.strip()
 
         with pdfplumber.open(path) as pdf:
             for phys_num, page in enumerate(pdf.pages, start=1):
@@ -606,39 +696,38 @@ def extract_pdf_pages(path):
 
                 # 6. 复用 raw_text 识别印刷页码（不再重复调用 extract_text）
                 printed = detect_printed_page(raw_text, phys_num)
-                pages.append((printed, combined, current_heading_path()))
+                pages.append((printed, combined, _heading_path(heading_stack)))
 
-        return pages
+        if pages:
+            return pages
 
     except ImportError:
-        pass  # 回退 pymupdf
+        pass
     except Exception as e:
         print(f"  ⚠️  pdfplumber 失败，尝试 pymupdf: {e}")
 
-    # ── pymupdf 回退 ──────────────────────────────────────
+    # ── 3. pymupdf 最终兜底 ───────────────────────────────
     try:
         import fitz
         doc = fitz.open(path)
         pages = []
         fb_stack = ['', '', '']
-        def fb_update(line):
-            lv = heading_level(line)
-            if lv == 1: fb_stack[0] = line.strip(); fb_stack[1] = ''; fb_stack[2] = ''
-            elif lv == 2: fb_stack[1] = line.strip(); fb_stack[2] = ''
-            elif lv == 3: fb_stack[2] = line.strip()
         for phys_num, page in enumerate(doc, start=1):
             raw_text = page.get_text('text')
             text = clean_page_text(raw_text)
             if not text:
                 continue
             for line in text.split('\n'):
-                fb_update(line)
+                lv = heading_level(line)
+                if lv == 1:   fb_stack[0] = line.strip(); fb_stack[1] = ''; fb_stack[2] = ''
+                elif lv == 2: fb_stack[1] = line.strip(); fb_stack[2] = ''
+                elif lv == 3: fb_stack[2] = line.strip()
             printed = detect_printed_page(raw_text, phys_num)
-            pages.append((printed, text, ' > '.join(h for h in fb_stack if h)))
+            pages.append((printed, text, _heading_path(fb_stack)))
         doc.close()
         return pages
     except ImportError:
-        print('  ⚠️  未安装 pdfplumber 和 pymupdf，跳过此文件')
+        print('  ⚠️  未安装任何 PDF 库，跳过此文件')
         return []
     except Exception as e:
         print(f'  ❌ PDF 提取失败: {e}')
@@ -702,34 +791,62 @@ def extract_docx(path):
         return []
 
 def extract_xlsx(path):
-    """把 Excel 每行转成自然语言句子，跳过图表类型汇总等非人才数据文件"""
+    """把 Excel 每行转成自然语言句子，跳过图表类型汇总等非人才数据文件。
+    支持合并单元格（forward-fill）：上方合并格的值会自动填充到下方空格，
+    确保"两院院士 > 工程院院士"等层级关系不丢失。
+    """
     fname = os.path.basename(path)
     # 跳过：图表类型汇总（开发参考）和基础数据汇总（已由 ingest.js 处理）
     if '图表类型' in fname or '基础数据汇总' in fname:
         return ""
     try:
         import openpyxl
-        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        # 不用 read_only，才能访问 merged_cells 信息
+        wb = openpyxl.load_workbook(path, data_only=True)
         parts = []
         for ws in wb.worksheets:
-            rows = list(ws.iter_rows(values_only=True))
-            if not rows:
+            # ── 1. 展开合并单元格：把合并区域的主格值填入所有子格 ──
+            #    openpyxl 合并格主格有值，其余子格为 None
+            #    先收集所有合并区域的主格值，再填充
+            merge_values = {}   # (row, col) -> value
+            for merged_range in ws.merged_cells.ranges:
+                # 主格（左上角）的值
+                top_row = merged_range.min_row
+                top_col = merged_range.min_col
+                top_val = ws.cell(top_row, top_col).value
+                for r in range(merged_range.min_row, merged_range.max_row + 1):
+                    for c in range(merged_range.min_col, merged_range.max_col + 1):
+                        merge_values[(r, c)] = top_val
+
+            # ── 2. 读取所有行，合并格子格用 merge_values 补全 ──
+            all_rows = []
+            for ri, row in enumerate(ws.iter_rows(), start=1):
+                cells = []
+                for ci, cell in enumerate(row, start=1):
+                    val = merge_values.get((ri, ci), cell.value)
+                    cells.append(str(val).strip() if val is not None else '')
+                all_rows.append(cells)
+
+            if not all_rows:
                 continue
-            # 第一行判断是否为表头
-            header = [str(c).strip() if c is not None else '' for c in rows[0]]
+
+            # ── 3. 识别表头（第一行有内容就作为表头）──
+            header = all_rows[0]
             has_header = any(h for h in header)
-            data_rows = rows[1:] if has_header else rows
+            data_rows = all_rows[1:] if has_header else all_rows
+
+            # ── 4. 转成自然语言句子 ──
             for row in data_rows:
-                cells = [str(c).strip() if c is not None else '' for c in row]
-                if not any(cells):
+                if not any(c for c in row if c and c != 'None'):
                     continue
                 if has_header:
-                    # 拼成"字段名：值"的自然语言句子
-                    pairs = [f"{h}：{v}" for h, v in zip(header, cells) if h and v and v != 'None']
+                    pairs = [f"{h}：{v}" for h, v in zip(header, row)
+                             if h and v and v != 'None']
                     if pairs:
                         parts.append('，'.join(pairs) + '。')
                 else:
-                    parts.append('，'.join(c for c in cells if c and c != 'None') + '。')
+                    parts.append('，'.join(c for c in row if c and c != 'None') + '。')
+
         wb.close()
         return "\n".join(parts)
     except ImportError:
@@ -867,8 +984,9 @@ def make_id(path, chunk_text_content):
 
 def main():
     import sys
-    force         = "--force"     in sys.argv
-    update_meta   = "--update-meta" in sys.argv
+    force            = "--force"           in sys.argv
+    update_meta      = "--update-meta"     in sys.argv
+    drop_collection  = "--drop-collection" in sys.argv
     global use_no_vision
     use_no_vision = "--no-vision" in sys.argv
 
@@ -884,6 +1002,8 @@ def main():
     print(f"   ChromaDB : {CHROMA_HOST}:{CHROMA_PORT}")
     print(f"   Ollama   : {OLLAMA_URL}  [{EMBED_MODEL}]")
     print(f"   图表识别 : {'关闭（--no-vision）' if use_no_vision else '开启（llava，未安装则自动跳过）'}")
+    if drop_collection:
+        print("   ⚠️  --drop-collection 模式：将删除整个集合（含结构化数据），换模型时使用")
     if force:
         print("   ⚠️  --force 模式：将删除旧知识文档后重新入库")
     if file_filter:
@@ -899,6 +1019,13 @@ def main():
     print("\n🔗 连接 ChromaDB...")
     try:
         chroma_heartbeat()
+        if drop_collection:
+            chroma_drop_collection()
+            if not force:
+                print("   ✅ 集合已删除。下一步：")
+                print("      1. node ingest.js          （重建结构化数据）")
+                print("      2. python knowledge_ingest.py --force  （重建知识文档）")
+                return
         col_id = chroma_get_or_create()
         if update_meta:
             update_metadata_only(col_id)

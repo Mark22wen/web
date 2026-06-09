@@ -61,13 +61,14 @@
 }
 
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-html{scroll-behavior:smooth;font-size:17px;}
+html{scroll-behavior:smooth;font-size:17px;overflow-x:hidden;}
 body{
   font-family:-apple-system,BlinkMacSystemFont,'Noto Serif SC','PingFang SC','Hiragino Sans GB','Microsoft YaHei',serif;
   background:var(--c-bg);color:var(--c-text);
   transition:background .35s,color .35s;
   -webkit-font-smoothing:antialiased;
   line-height:1.6;
+  overflow-x:hidden;
 }
 ::selection{background:rgba(59,130,246,.22);}
 
@@ -1091,6 +1092,7 @@ body.dark-mode .composer-stop:hover{background:#e53e3e;color:#fff;}
 .composer-send:disabled{opacity:.4;cursor:not-allowed;transform:none;}
 .composer-send svg{stroke:#fff;}
 .composer-hint{font-size:.69rem;color:var(--c-muted);margin-top:7px;}
+.composer-disclaimer{font-size:.65rem;color:var(--c-muted);opacity:.6;margin-top:4px;text-align:center;}
 
 .rag-table{border-collapse:collapse;width:100%;margin:10px 0;font-size:.86rem;border-radius:10px;overflow:hidden;}
 .rag-table th{background:var(--c-hover);font-weight:700;text-align:left;padding:8px 12px;border:1px solid var(--c-border);color:var(--c-accent);}
@@ -3706,41 +3708,90 @@ body.dark-mode .hero-preview-card::after{color:rgba(191,219,254,.28);}
   font-size:.7rem;
   font-weight:700;
 }
-.agent-ui-actions{
-  margin-top:12px !important;
-  padding:10px 0 0 !important;
-  border:0 !important;
-  border-top:1px solid rgba(148,163,184,.16) !important;
-  background:transparent !important;
-}
-.agent-ui-action-title{
-  color:#8b98a8 !important;
-  font-size:.72rem !important;
-}
-.agent-action-btn{
-  border:1px solid rgba(96,165,250,.22) !important;
-  background:rgba(96,165,250,.08) !important;
-  color:#bfdbfe !important;
-  border-radius:9px !important;
-  box-shadow:none !important;
-}
-body:not(.dark-mode) .agent-action-btn{
-  color:#1d4f8f !important;
-  background:rgba(37,99,235,.06) !important;
-}
-.agent-inline-chart-wrap{
-  margin:12px 0 !important;
-  padding:10px !important;
-  border:1px solid rgba(148,163,184,.16) !important;
-  border-radius:12px !important;
-  background:rgba(255,255,255,.06) !important;
-}
 body:not(.dark-mode) .agent-inline-chart-wrap{
   background:rgba(255,255,255,.72) !important;
 }
-.agent-inline-chart{
-  min-height:300px !important;
+
+/* ── 图表+数据明细 触发行 ───────────────────────────────── */
+.rag-chart-trigger-row{
+  display:flex;
+  align-items:stretch;
+  gap:6px;
+  margin-top:10px;
 }
+.rag-chart-trigger-row .rag-chart-trigger{
+  flex:1;
+  margin-top:0;
+}
+.rag-table-trigger{
+  display:flex;
+  align-items:center;
+  gap:5px;
+  padding:0 13px;
+  border-radius:8px;
+  border:1px solid var(--c-border);
+  background:transparent;
+  color:var(--c-muted);
+  font-size:.78rem;
+  font-weight:600;
+  cursor:pointer;
+  white-space:nowrap;
+  transition:background .15s,color .15s;
+}
+.rag-table-trigger:hover{background:var(--c-border);color:var(--c-text);}
+body.dark-mode .rag-table-trigger{border-color:rgba(255,255,255,.12);}
+body.dark-mode .rag-table-trigger:hover{background:rgba(255,255,255,.08);color:#e2e8f0;}
+
+/* ── 内联数据明细表 ──────────────────────────────────────── */
+.inline-data-table-wrap{
+  margin:10px 0 6px;
+  border:1px solid var(--c-border);
+  border-radius:8px;
+  overflow:hidden;
+  font-size:.8rem;
+}
+.idt-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:7px 12px;
+  background:var(--c-surface);
+  border-bottom:1px solid var(--c-border);
+}
+.idt-title{font-weight:600;color:var(--c-text);font-size:.8rem;}
+.idt-dl-btn{
+  font-size:.72rem;
+  padding:3px 9px;
+  border-radius:5px;
+  border:1px solid var(--c-border);
+  background:transparent;
+  color:var(--c-muted);
+  cursor:pointer;
+  transition:background .15s;
+}
+.idt-dl-btn:hover{background:var(--c-border);color:var(--c-text);}
+.idt-scroll{overflow-x:auto;max-height:260px;overflow-y:auto;}
+.idt-table{width:100%;border-collapse:collapse;white-space:nowrap;}
+.idt-table thead tr{
+  background:var(--c-surface);
+  position:sticky;top:0;z-index:1;
+}
+.idt-table th{
+  padding:6px 12px;
+  text-align:left;
+  font-weight:600;
+  color:var(--c-muted);
+  border-bottom:1px solid var(--c-border);
+  font-size:.75rem;
+}
+.idt-table td{
+  padding:5px 12px;
+  border-bottom:1px solid var(--c-border);
+  color:var(--c-text);
+}
+.idt-table tbody tr:last-child td{border-bottom:none;}
+.idt-table tbody tr:hover td{background:var(--c-hover,rgba(0,0,0,.03));}
+body.dark-mode .idt-table tbody tr:hover td{background:rgba(255,255,255,.04);}
 
 /* delivery polish: scatter modal, rename hint, visible chart layout */
 body.sdufe-cover-active .relief-seal{

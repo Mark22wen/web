@@ -33,7 +33,7 @@ warnings.filterwarnings("ignore")  # 忽略 SSL 警告
 CHROMA_HOST    = os.environ.get("CHROMA_HOST", "localhost")
 CHROMA_PORT    = int(os.environ.get("CHROMA_PORT", "8000"))
 OLLAMA_URL     = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-EMBED_MODEL    = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+EMBED_MODEL    = os.environ.get("OLLAMA_EMBED_MODEL", "bge-m3")
 COLLECTION     = "patent_knowledge"
 TENANT         = "default_tenant"
 DATABASE       = "default_database"

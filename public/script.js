@@ -62,257 +62,8 @@ function escapeRegex(str) {
 
 // ======================= Landing Page & RAG 全屏界面 =======================
 
-let threeScene = null;
 let ragReturnPage = 'dashboard';
 let pendingSheetSwitchTimer = null;
-
-function disposeLandingScene() {
-    if (!threeScene) return;
-    const currentScene = threeScene;
-    currentScene.disposed = true;
-    try {
-        if (currentScene.animationId) cancelAnimationFrame(currentScene.animationId);
-        if (currentScene.resizeHandler) window.removeEventListener('resize', currentScene.resizeHandler);
-        if (currentScene.mouseHandler) document.removeEventListener('mousemove', currentScene.mouseHandler);
-        if (currentScene.observer) currentScene.observer.disconnect();
-        (currentScene.disposables || []).forEach(item => {
-            try {
-                if (item.geometry) item.geometry.dispose();
-                if (item.material) item.material.dispose();
-                if (item.dispose) item.dispose();
-            } catch(e) {}
-        });
-        if (currentScene.renderer) {
-            currentScene.renderer.dispose();
-        }
-    } catch(e) {
-        console.warn('Landing scene dispose failed:', e);
-    }
-    if (threeScene === currentScene) threeScene = null;
-}
-
-function initLanding() {
-    const canvas = document.getElementById('hero-canvas');
-    if (!canvas || threeScene) return;
-    if (!window.THREE) {
-        canvas.style.display = 'none';
-        document.body.classList.add('three-unavailable');
-        console.warn('[Platform] ThreeJS 未加载，已启用 CSS 星空降级');
-        return;
-    }
-    
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-    threeScene = { scene, camera, renderer, disposables: [], animationId: null, observer: null, resizeHandler: null, mouseHandler: null, disposed: false };
-    const sceneState = threeScene;
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    
-    // ---- 多层粒子系统 ----
-    const particlesCount = window.matchMedia('(max-width: 768px)').matches ? 320 : 680;
-    const posArray = new Float32Array(particlesCount * 3);
-    const colorArray = new Float32Array(particlesCount * 3);
-    const speedArray = new Float32Array(particlesCount); // individual drift speeds
-    const sizeArray = new Float32Array(particlesCount);
-
-    const palette = [
-        [0.18, 0.48, 0.92],
-        [0.20, 0.72, 0.88],
-        [0.62, 0.80, 1.00],
-        [0.86, 0.74, 0.38],
-    ];
-    
-    for (let i = 0; i < particlesCount; i++) {
-        const i3 = i * 3;
-        // Distribute in a wider, flatter space
-        posArray[i3]   = (Math.random() - 0.5) * 60;
-        posArray[i3+1] = (Math.random() - 0.5) * 40;
-        posArray[i3+2] = (Math.random() - 0.5) * 30;
-        
-        const col = palette[Math.floor(Math.random() * palette.length)];
-        colorArray[i3]   = col[0] + Math.random() * 0.15;
-        colorArray[i3+1] = col[1] + Math.random() * 0.15;
-        colorArray[i3+2] = col[2] + Math.random() * 0.08;
-        
-        speedArray[i] = 0.3 + Math.random() * 0.7;
-        sizeArray[i] = 0.07 + Math.random() * 0.12;
-    }
-    
-    const particlesGeometry = new THREE.BufferGeometry();
-    particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
-    particlesGeometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
-    
-    const particlesMaterial = new THREE.PointsMaterial({
-        size: 0.095,
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.92,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-    });
-    
-    const particlesMesh = new THREE.Points(particlesGeometry, particlesMaterial);
-    scene.add(particlesMesh);
-    threeScene.disposables.push(particlesMesh);
-    
-    // ---- Connection lines system (LineSegments) ----
-    const MAX_LINES = 980;
-    const linePositions = new Float32Array(MAX_LINES * 6); // 2 points * xyz
-    const lineColors = new Float32Array(MAX_LINES * 6);
-    const lineGeo = new THREE.BufferGeometry();
-    lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
-    lineGeo.setAttribute('color', new THREE.BufferAttribute(lineColors, 3));
-    const lineMat = new THREE.LineBasicMaterial({
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.28,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-    });
-    const linesMesh = new THREE.LineSegments(lineGeo, lineMat);
-    scene.add(linesMesh);
-    threeScene.disposables.push(linesMesh);
-    
-    // ---- Floating rings (orbit decorators) ----
-    function makeRing(radius, color, tilt) {
-        const pts = [];
-        for (let i = 0; i <= 128; i++) {
-            const a = (i / 128) * Math.PI * 2;
-            pts.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius * 0.3, 0));
-        }
-        const geo = new THREE.BufferGeometry().setFromPoints(pts);
-        const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending });
-        const ring = new THREE.Line(geo, mat);
-        ring.rotation.x = tilt;
-        scene.add(ring);
-        threeScene.disposables.push(ring);
-        return ring;
-    }
-    const rings = [
-        makeRing(12, 0x667eea, 0.4),
-        makeRing(18, 0x764ba2, -0.3),
-        makeRing(24, 0x4facfe, 0.6),
-    ];
-    
-    camera.position.z = 5;
-    
-    let mouseX = 0, mouseY = 0;
-    let targetMouseX = 0, targetMouseY = 0;
-    const mouseHandler = (e) => {
-        targetMouseX = (e.clientX / window.innerWidth - 0.5) * 2;
-        targetMouseY = (e.clientY / window.innerHeight - 0.5) * 2;
-    };
-    document.addEventListener('mousemove', mouseHandler);
-    threeScene.mouseHandler = mouseHandler;
-    
-    let clock = new THREE.Clock();
-    let animationId = null;
-    
-    function updateConnectionLines(pos, count) {
-        let lineIdx = 0;
-        const CONNECT_DIST = 8.0;
-        const CONNECT_DIST_SQ = CONNECT_DIST * CONNECT_DIST;
-        // Only check subset for performance
-        const step = Math.max(1, Math.floor(count / 300));
-        
-        for (let i = 0; i < count && lineIdx < MAX_LINES; i += step) {
-            const ax = pos[i*3], ay = pos[i*3+1], az = pos[i*3+2];
-            for (let j = i + step; j < count && lineIdx < MAX_LINES; j += step) {
-                const dx = ax - pos[j*3], dy = ay - pos[j*3+1], dz = az - pos[j*3+2];
-                const distSq = dx*dx + dy*dy + dz*dz;
-                if (distSq < CONNECT_DIST_SQ) {
-                    const alpha = 1 - distSq / CONNECT_DIST_SQ;
-                    const l6 = lineIdx * 6;
-                    linePositions[l6]   = ax; linePositions[l6+1] = ay; linePositions[l6+2] = az;
-                    linePositions[l6+3] = pos[j*3]; linePositions[l6+4] = pos[j*3+1]; linePositions[l6+5] = pos[j*3+2];
-                    const c = alpha * 0.5;
-                    lineColors[l6]=0.79*c; lineColors[l6+1]=0.66*c; lineColors[l6+2]=0.30*c;
-                    lineColors[l6+3]=0.79*c; lineColors[l6+4]=0.66*c; lineColors[l6+5]=0.30*c;
-                    lineIdx++;
-                }
-            }
-        }
-        // Clear unused lines
-        for (let k = lineIdx; k < MAX_LINES; k++) {
-            const l6 = k * 6;
-            linePositions[l6] = linePositions[l6+1] = linePositions[l6+2] = 0;
-            linePositions[l6+3] = linePositions[l6+4] = linePositions[l6+5] = 0;
-        }
-        lineGeo.attributes.position.needsUpdate = true;
-        lineGeo.attributes.color.needsUpdate = true;
-    }
-    
-    let lineTimer = 0;
-    
-    function animate() {
-        if (!threeScene || threeScene !== sceneState || sceneState.disposed) return;
-        animationId = requestAnimationFrame(animate);
-        sceneState.animationId = animationId;
-        const elapsed = clock.getElapsedTime();
-        const delta = clock.getDelta ? 0.016 : 0.016;
-        
-        // Smooth mouse follow
-        mouseX += (targetMouseX - mouseX) * 0.04;
-        mouseY += (targetMouseY - mouseY) * 0.04;
-        
-        // Particle drift + wave
-        const pos = particlesGeometry.attributes.position.array;
-        for (let i = 0; i < particlesCount; i++) {
-            const i3 = i * 3;
-            // Gentle vertical drift
-            pos[i3+1] += Math.sin(elapsed * speedArray[i] * 0.4 + i * 0.02) * 0.002;
-            // Horizontal wave
-            pos[i3]   += Math.cos(elapsed * speedArray[i] * 0.2 + i * 0.015) * 0.001;
-            // Wrap bounds
-            if (pos[i3+1] > 20) pos[i3+1] = -20;
-            if (pos[i3+1] < -20) pos[i3+1] = 20;
-            if (pos[i3] > 30) pos[i3] = -30;
-            if (pos[i3] < -30) pos[i3] = 30;
-        }
-        particlesGeometry.attributes.position.needsUpdate = true;
-        
-        // Slow rotation + mouse parallax
-        particlesMesh.rotation.y = elapsed * 0.04 + mouseX * 0.12;
-        particlesMesh.rotation.x = elapsed * 0.015 + mouseY * 0.08;
-        
-        // Ring animations
-        rings[0].rotation.z = elapsed * 0.08;
-        rings[1].rotation.z = -elapsed * 0.06;
-        rings[2].rotation.z = elapsed * 0.05;
-        rings.forEach(r => { r.rotation.y = mouseX * 0.3; r.rotation.x = mouseY * 0.2; });
-        
-        // Update connection lines every ~6 frames for perf
-        lineTimer++;
-        if (lineTimer % 6 === 0) {
-            updateConnectionLines(pos, Math.min(particlesCount, 800));
-            linesMesh.rotation.copy(particlesMesh.rotation);
-        }
-        
-        if (!sceneState.disposed && threeScene === sceneState) {
-            renderer.render(scene, camera);
-        }
-    }
-    animate();
-    
-    const resizeHandler = () => {
-        if (document.getElementById('landing-page')?.style.display === 'none') return;
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    };
-    window.addEventListener('resize', resizeHandler);
-    threeScene.resizeHandler = resizeHandler;
-    
-    const observer = new MutationObserver(() => {
-        const landing = document.getElementById('landing-page');
-        if (landing && landing.style.display === 'none' && animationId) {
-            disposeLandingScene();
-        }
-    });
-    observer.observe(document.body, { attributes: true, subtree: true });
-    if (threeScene) threeScene.observer = observer;
-}
 
 function showLanding() {
     const lp = document.getElementById('landing-page');
@@ -329,14 +80,6 @@ function showLanding() {
         if (rag) rag.style.display = 'none';
         if (fab) fab.style.display = 'none';
     }, 50);
-    
-    initLanding();
-}
-
-function scrollToFeatures() {
-    const el = document.getElementById('features-section');
-    if (!el) return;
-    el.scrollIntoView({ behavior: 'auto', block: 'start' });
 }
 
 function enterSdufeCover() {
@@ -626,7 +369,6 @@ function enterDashboard(tab) {
             if (lp) lp.style.display = 'none';
             if (dp && !fromDashboard) dp.style.display = 'none';
             if (fab) fab.style.display = 'none';
-            if (!fromDashboard) disposeLandingScene();
             openRagFullscreen({ returnPage: ragReturnPage });
         }, 180);
         return;
@@ -641,7 +383,6 @@ function enterDashboard(tab) {
     setTimeout(() => {
         if (lp) {
             lp.style.display = 'none';
-            disposeLandingScene();
         }
         if (dp) {
             dp.style.display = 'block';
@@ -754,60 +495,6 @@ function initHeroPreview() {
 
 // ======================= RAG 全屏界面 =======================
 
-function initLandingScrollHint() {
-    if (initLandingScrollHint._bound) return;
-    initLandingScrollHint._bound = true;
-    const hint = document.querySelector('.hero-scroll-hint');
-    if (hint) hint.style.display = 'none';
-    // landing-section-divider removed
-    const update = () => {
-        const landing = document.getElementById('landing-page');
-        if (!landing) return;
-        landing.classList.toggle('landing-scrolled', window.scrollY > 80);
-    };
-    window.addEventListener('scroll', update, { passive: true });
-    update();
-}
-
-function refineLandingCapabilities() {
-    if (refineLandingCapabilities._done) return;
-    refineLandingCapabilities._done = true;
-    const section = document.querySelector('.capability-grid-section');
-    if (!section) return;
-    const eyebrow = section.querySelector('.section-eyebrow');
-    const title = section.querySelector('.section-title');
-    const sub = section.querySelector('.section-sub');
-    if (eyebrow) eyebrow.textContent = 'AI 助手增强能力';
-    if (title) title.textContent = '让数据分析更像一次专业协作';
-    if (sub) sub.textContent = '上方是核心功能入口，这里展示 AI 助手能额外完成的研究辅助任务。';
-
-    const cards = [...section.querySelectorAll('.cap-card')];
-    const copy = [
-        {
-            title: '多问题一次回答',
-            desc: '一次输入排名、趋势、对比、预测等多个问题，助手会自动拆解成子任务，逐项分析后合并为完整答复。',
-            tags: ['自动拆题', '顺序执行', '结果合并', '上下文继承']
-        },
-        { title: '异常与短板发现', desc: '围绕某个指标自动提示高低值、离群地区和可能需要重点关注的变化方向。' },
-        { title: '方法解释与可信度', desc: '对预测、排名、对比结果补充方法说明、样本年份、回测误差和置信区间。' },
-        { title: '研究口径整理', desc: '把地区、年份、指标和数据来源整理成可复用的分析口径，减少重复筛选。' },
-        { title: '报告摘要生成', desc: '把图表发现归纳为适合汇报使用的结论、建议和下一步追问方向。' }
-    ];
-
-    cards.forEach((card, index) => {
-        const item = copy[index];
-        if (!item) return;
-        const h3 = card.querySelector('h3');
-        const p = card.querySelector('p');
-        if (h3) h3.textContent = item.title;
-        if (p) p.textContent = item.desc;
-        const tagRow = card.querySelector('.cap-tag-row');
-        if (tagRow && item.tags) {
-            tagRow.innerHTML = item.tags.map(tag => `<span class="cap-tag">${escapeHtml(tag)}</span>`).join('');
-        }
-    });
-}
-
 function refineRagCapabilityBadges() {
     const caps = document.querySelector('.rag-caps');
     if (!caps || refineRagCapabilityBadges._done) return;
@@ -875,7 +562,6 @@ function openRagFullscreen(options = {}) {
     } else {
         if (lp) lp.style.display = 'none';
         if (dp) dp.style.display = 'block';
-        disposeLandingScene();
     }
     rag.style.display = 'flex';
     document.body.classList.add('rag-open');
@@ -1072,7 +758,7 @@ async function _sendRagQueued(question) {
         data.answer = finalAnswer2; // 供报告导出使用
         let html = '';
         if (data.reasoning?.length) {
-            html += `<details class="rag-process-details"><summary>已完成思考过程</summary>
+            html += `<details class="rag-process-details"><summary>分析过程</summary>
                 ${data.reasoning.map(r => `<div class="rag-method-item"><span>${escapeHtml(r)}</span></div>`).join('')}
             </details>`;
         }
@@ -1158,7 +844,7 @@ function _appendRegenerateBtn(bubble, question) {
         const answerExcerpt = (answerEl ? (answerEl.innerText || answerEl.textContent) : bubble.innerText)
             .replace(/\s+/g, ' ').trim().slice(0, 100);
         // 同时记录触发该回答的用户问题（前60字）
-        const questionExcerpt = String(question || '').replace(/（追问关于[\s\S]*?）\n?/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+        const questionExcerpt = String(question || '').replace(/\s+/g, ' ').trim().slice(0, 60);
         const input = document.getElementById('rag-input');
         if (!input) return;
 
@@ -1273,8 +959,8 @@ function switchSession(id) {
     if (!session.messages.length) {
         container.innerHTML = `<div class="rag-welcome">
             <div class="rag-welcome-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="32" height="32"><use href="#ico-brain"/></svg></div>
-            <h2>我是你的数据分析助手</h2>
-            <p>查询数据 · 分析趋势 · 对比地区 · 预测未来</p>
+            <h2>科研教育人才一体化平台智能助手</h2>
+            <p>查询数据 · 分析趋势 · 了解人才体系 · 查阅报告内容</p>
         </div>`;
     } else {
         // 配对 user/assistant 消息，以便恢复时为 assistant 气泡挂上重新生成/追问按钮
@@ -1418,11 +1104,9 @@ async function sendRagMessage() {
     let question = input?.value.trim();
     if (!question) return;
 
-    // 若有追问锚点，在问题里注入 Q+A 上下文（服务端 LLM 会读到这段）
-    if (window._ragFollowupContext) {
-        question = `（追问上下文：${window._ragFollowupContext}）\n${question}`;
-        clearFollowupContext();
-    }
+    // 追问：把锚定的 Q+A 作为独立字段传给 server，不污染 question 文本
+    const followupContext = window._ragFollowupContext || null;
+    if (followupContext) clearFollowupContext();
 
     // 正在回答时：入队，立即显示用户消息气泡，清空输入框
     if (isRagStreaming) {
@@ -1478,7 +1162,8 @@ async function sendRagMessage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 question,
-                sessionId: currentSessionId || 'default'
+                sessionId: currentSessionId || 'default',
+                ...(followupContext ? { followupContext } : {})
             })
         });
         if (!response.ok) throw new Error(`服务器错误 ${response.status}`);
@@ -1589,7 +1274,7 @@ async function sendRagMessage() {
         
         if (processHtml) {
             html += `<details class="rag-process-details">
-                <summary>已完成思考过程</summary>
+                <summary>分析过程</summary>
                 ${processHtml}
             </details>`;
         }
@@ -1607,9 +1292,9 @@ async function sendRagMessage() {
             const visibleCitations = data.citations.slice(0, 3);
             const hiddenCitations = data.citations.slice(3);
             html += `<div class="rag-citations">
-                <div class="rag-citation-head"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-src"/></svg>数据来源</div>
+                <div class="rag-citation-head">数据来源</div>
                 <div class="rag-citation-list">
-                    ${visibleCitations.map(c => `<span class="rag-citation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><use href="#ico-src"/></svg>${escapeHtml(c)}</span>`).join('')}
+                    ${visibleCitations.map(c => `<span class="rag-citation">${escapeHtml(c)}</span>`).join('')}
                 </div>
                 ${hiddenCitations.length ? `<details class="rag-more-citations"><summary>查看其余 ${hiddenCitations.length} 条来源</summary><div class="rag-citation-list">${hiddenCitations.map(c => `<span class="rag-citation">${escapeHtml(c)}</span>`).join('')}</div></details>` : ''}
             </div>`;
@@ -1764,36 +1449,6 @@ function agentDownload(filename, mime, content) {
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
-function agentGenerateReportDeprecatedHtml(data, question) {
-    const now = new Date().toLocaleString();
-    const title = String(question || 'AI 数据分析报告').slice(0, 80);
-    const reasoning = (data.reasoning || []).map(x => `<li>${escapeHtml(String(x))}</li>`).join('');
-    const citations = (data.citations || []).map(x => `<li>${escapeHtml(String(x))}</li>`).join('');
-    const trace = (data.toolTrace || []).map(t => `<li>${escapeHtml(t.normalizedTool || t.tool || 'tool')}：${escapeHtml(JSON.stringify(t.params || {}))}</li>`).join('');
-    const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
-<style>body{font-family:"Microsoft YaHei",Arial,sans-serif;line-height:1.75;color:#172033;margin:42px;background:#f6f9fc}main{max-width:920px;margin:auto;background:white;border-radius:18px;padding:34px 42px;box-shadow:0 18px 55px rgba(30,60,100,.12)}h1{color:#0f4f97;margin-top:0}h2{margin-top:30px;color:#12345f}.meta{color:#667085}.answer{white-space:pre-wrap}li{margin:6px 0}</style></head><body><main>
-<h1>${escapeHtml(title)}</h1><div class="meta">生成时间：${escapeHtml(now)} · 来源：山东财经大学科研教育人才数据平台 Agent</div>
-<h2>分析结论</h2><div class="answer">${formatAnswer(data.answer || '')}</div>
-${reasoning ? `<h2>分析过程</h2><ul>${reasoning}</ul>` : ''}
-${trace ? `<h2>工具调用</h2><ul>${trace}</ul>` : ''}
-${citations ? `<h2>数据来源</h2><ul>${citations}</ul>` : ''}
-</main></body></html>`;
-    agentDownload(`agent_report_${Date.now()}.html`, 'text/html;charset=utf-8', html);
-    showToast?.('分析报告已生成并下载', 'success');
-}
-
-function agentQuestionIntent(question) {
-    const q = String(question || '');
-    return {
-        wantsReport: /报告|分析稿|总结文档|生成总结|生成分析/.test(q),
-        wantsExport: /导出|下载|保存|生成文件/.test(q),
-        wantsTable: /数据表|表格|明细|Excel|CSV/i.test(q),
-        wantsScatter: /散点|相关|关联/.test(q),
-        wantsRank: /排名|排行|前\d+|最高|最低/.test(q),
-        wantsChart: /图表|趋势图|柱状图|折线图|看板|切换|展示|查看/.test(q)
-    };
-}
-
 function agentFocusDashboard(tab) {
     const rag = document.getElementById('rag-fullscreen');
     const dp = document.getElementById('dashboard-page');
@@ -1803,72 +1458,6 @@ function agentFocusDashboard(tab) {
     } else if (!dashboardVisible) {
         enterDashboard(tab);
     }
-}
-
-function executeAgentUiActionsDeprecated(data, question, sourceBubble) {
-    const intent = agentQuestionIntent(question);
-    const hasChart = !!(data?.chart && data.chart.metric);
-    if (intent.wantsReport) agentGenerateReport(data, question);
-    if (!hasChart && !intent.wantsExport && !intent.wantsTable && !intent.wantsScatter && !intent.wantsRank && !intent.wantsChart) return;
-
-    const targetTab = intent.wantsScatter ? 'scatter' : intent.wantsTable ? 'table' : undefined;
-    agentFocusDashboard(targetTab);
-
-    setTimeout(() => {
-        const chart = data.chart || {};
-        const trace = Array.isArray(data.toolTrace) ? data.toolTrace.find(t => t?.params) : null;
-        const params = trace?.params || {};
-        const metric = chart.metric || params.metric || data.methodSummary?.metric || '';
-        const year = chart.years?.[0] || params.year || params.targetYear || data.methodSummary?.year;
-        const sheet = agentInferSheet(data, question);
-
-        if (sheet && currentSheet !== sheet && typeof requestSwitchSheet === 'function') {
-            requestSwitchSheet(sheet);
-        }
-
-        setTimeout(() => {
-            if (intent.wantsTable) {
-                if (typeof setTableSheet === 'function') setTableSheet(sheet || tableSheet || currentSheet, { independent: false });
-                toggleTableSection(true); // 自动展开
-                document.getElementById('section-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            } else if (intent.wantsScatter) {
-                const scatterSection = document.getElementById('section-scatter');
-                if (scatterSection) scatterSection.style.display = 'block';
-                scatterSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                if (typeof openAnalysisPanel === 'function') openAnalysisPanel('scatter');
-            } else if (intent.wantsRank || chart.type === 'bar') {
-                const advancedSection = document.getElementById('section-advanced');
-                if (advancedSection) advancedSection.style.display = 'block';
-                advancedSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                agentSelectAdvancedMetric(metric, year);
-            } else {
-                if (metric) agentSelectMainMetric(metric);
-                const chartType = document.getElementById('chart-type');
-                if (chartType && chart.type) chartType.value = chart.type === 'bar' ? 'bar' : chart.type === 'line' ? 'line' : chartType.value;
-                try { renderMainChart?.(); } catch(e) {}
-                document.getElementById('section-chart')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
-
-            if (intent.wantsExport) {
-                setTimeout(() => {
-                    const q = String(question || '');
-                    if (/Excel|xlsx/i.test(q)) exportData?.('xlsx');
-                    else if (/CSV/i.test(q)) exportData?.('csv');
-                    else if (intent.wantsTable) exportData?.(/CSV/i.test(q) ? 'csv' : 'xlsx');
-                    else if (intent.wantsScatter) exportAnalysisChart?.(/jpg|jpeg/i.test(q) ? 'jpg' : 'png');
-                    else if (intent.wantsRank) exportChart?.(advancedChart, /jpg|jpeg/i.test(q) ? 'jpg' : 'png', 'agent_rank_chart');
-                    else exportChart?.(mainChart, /jpg|jpeg/i.test(q) ? 'jpg' : 'png', 'agent_main_chart');
-                }, 520);
-            }
-
-            if (sourceBubble && !sourceBubble.querySelector('.agent-ui-action-note')) {
-                const note = document.createElement('div');
-                note.className = 'agent-ui-action-note';
-                note.textContent = intent.wantsExport ? 'Agent 已执行页面切换并触发导出。' : 'Agent 已根据问题切换到对应数据视图。';
-                sourceBubble.appendChild(note);
-            }
-        }, 360);
-    }, 260);
 }
 
 function addRagMessage(role, content, isPlaceholder = false) {
@@ -1927,15 +1516,6 @@ function updateRagHistory() {
     }
 })();
 
-function renderAgentChartFromRag(configStr) {
-    try {
-        const config = JSON.parse(configStr.replace(/&quot;/g, '"'));
-        renderAgentChart(config);
-    } catch (e) {
-        console.error('图表配置解析失败:', e);
-    }
-}
-
 // ======================= 原有聊天面板兼容（隐藏，用新版替代）=======================
 
 const chatMessages = document.getElementById('chat-messages');
@@ -1993,7 +1573,7 @@ function showChartUnavailable(dom, title = '图表库未加载') {
     dom.innerHTML = `
         <div class="chart-fallback">
             <div class="chart-fallback-title">${escapeHtml(title)}</div>
-            <div class="chart-fallback-text">当前浏览器未能加载 ECharts。数据表和智能问答仍可使用；恢复网络或改用本地静态库后图表会自动恢复。</div>
+            <div class="chart-fallback-text">当前浏览器未能加载 ECharts。数据表和智能助手仍可使用；恢复网络或改用本地静态库后图表会自动恢复。</div>
         </div>
     `;
 }
@@ -2137,19 +1717,31 @@ function renderAgentChart(config, targetBubble) {
     if (!window.workbook || !window.workbook['省份']) { console.warn('数据未加载'); return; }
 
     const doInsert = (bubble) => {
-        // Remove any previous trigger in this bubble
-        const old = bubble.querySelector('.rag-chart-trigger');
+        // Remove any previous trigger row in this bubble
+        const old = bubble.querySelector('.rag-chart-trigger-row');
         if (old) old.remove();
 
-        const btn = document.createElement('button');
-        btn.className = 'rag-chart-trigger';
         const regionStr = (config.regions||[]).length ? config.regions.join('、') : '全国';
-        btn.innerHTML = `
+
+        const row = document.createElement('div');
+        row.className = 'rag-chart-trigger-row';
+
+        const chartBtn = document.createElement('button');
+        chartBtn.className = 'rag-chart-trigger';
+        chartBtn.innerHTML = `
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-chart-bar"/></svg>
           <span class="ctr-label">${config.title || config.metric + ' 图表'}</span>
           <span class="ctr-hint">点击查看 · ${regionStr}</span>`;
-        btn.addEventListener('click', () => openChartModal(config));
-        bubble.appendChild(btn);
+        chartBtn.addEventListener('click', () => openChartModal(config));
+
+        const tableBtn = document.createElement('button');
+        tableBtn.className = 'rag-table-trigger';
+        tableBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg> 数据明细`;
+        tableBtn.addEventListener('click', () => toggleInlineDataTable(bubble, config));
+
+        row.appendChild(chartBtn);
+        row.appendChild(tableBtn);
+        bubble.appendChild(row);
 
         // Scroll chat to bottom
         const msgs = document.getElementById('rag-messages');
@@ -2684,8 +2276,8 @@ async function clearConversation() {
                 <div class="rag-welcome-avatar">
                     <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg>
                 </div>
-                <h2>我是你的数据分析助手</h2>
-                <p>查询数据 · 分析趋势 · 对比地区 · 预测未来<br>所有回答均基于平台数据，附带来源溯源。</p>
+                <h2>科研教育人才一体化平台智能助手</h2>
+                <p>查询数据 · 分析趋势 · 对比地区 · 预测未来 · 了解人才体系 · 查阅报告内容<br>回答基于平台结构化数据与知识文档，附带来源溯源。</p>
                 <div class="rag-welcome-hints">
                     <button class="rag-hint-btn" onclick="sendRagQuick('${_ly}年各省杰青数量前10排名')">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
@@ -2695,20 +2287,20 @@ async function clearConversation() {
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-trend"/></svg>
                         近5年长江学者趋势
                     </button>
-                    <button class="rag-hint-btn" onclick="sendRagQuick('预测${_ny}年全国普通高校数量')">
-                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>
-                        预测${_ny}年高校数量
+                    <button class="rag-hint-btn" onclick="sendRagQuick('杰青和优青有什么区别？')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg>
+                        杰青与优青的区别
                     </button>
-                    <button class="rag-hint-btn" onclick="sendRagQuick('江苏和浙江R&amp;D投入强度对比')">
-                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-scatter"/></svg>
-                        江苏vs浙江R&amp;D投入对比
+                    <button class="rag-hint-btn" onclick="sendRagQuick('四大青年人才包括哪些称号？')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>
+                        四大青人才称号
                     </button>
                 </div>
             </div>`;
         }
         // Update hint bar
         const hint = document.getElementById('rag-context-hint');
-        if (hint) hint.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg><span>支持上下文追问 · 无地区时默认全国数据</span>';
+        if (hint) hint.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg><span>支持上下文追问 · 可查数据也可问知识 · 无地区时默认全国数据</span>';
         renderSessionList();
         showToast('对话已清空', 'success', 2000);
         return;
@@ -2858,8 +2450,8 @@ function initQuickButtons(data) {
     const hints = {
         'hint-ranking':  { q: `${ly}年各省杰青数量前10排名`,        label: `${ly}年各省杰青排名` },
         'hint-trend':    { q: `近5年全国长江学者数量趋势`,            label: '近5年长江学者趋势' },
-        'hint-forecast': { q: `预测${ny}年全国普通高校数量`,          label: `预测${ny}年高校数量` },
-        'hint-compare':  { q: `江苏和浙江R&D投入强度对比`,            label: '江苏vs浙江R&D投入对比' }
+        'hint-forecast': { q: `杰青和优青有什么区别？`,               label: '杰青与优青的区别' },
+        'hint-compare':  { q: `四大青年人才包括哪些称号？`,            label: '四大青人才称号' }
     };
     for (const [id, cfg] of Object.entries(hints)) {
         const btn = document.getElementById(id);
@@ -3426,7 +3018,7 @@ function switchSheet(sheetName) {
         const firstRow = originalRows[0];
         valueFields = Object.keys(firstRow).filter(key => key !== "年份" && key !== "地区" && key !== "时间地区");
         const groups = [...new Set(originalRows.map(r => r[groupField]))].filter(v => v).sort();
-        selectedGroups = groups.length ? [groups[0]] : [];
+        selectedGroups = groups.slice(0, 3);
         buildGroupPanel(groups, "地级市");
         document.querySelector(".pie-card") && (document.querySelector(".pie-card").style.display = "none");
         document.querySelector(".advanced-card") && (document.querySelector(".advanced-card").style.display = "block");
@@ -3444,7 +3036,7 @@ function switchSheet(sheetName) {
         const firstRow = originalRows[0];
         valueFields = Object.keys(firstRow).filter(key => key !== "年份" && key !== "地区");
         const groups = [...new Set(originalRows.map(r => r[groupField]))].filter(v => v).sort();
-        selectedGroups = groups.length ? [groups[0]] : [];
+        selectedGroups = groups.slice(0, 3);
         buildGroupPanel(groups, "省份");
         document.querySelector(".pie-card") && (document.querySelector(".pie-card").style.display = "none");
         document.querySelector(".advanced-card") && (document.querySelector(".advanced-card").style.display = "block");
@@ -3470,6 +3062,9 @@ function switchSheet(sheetName) {
     applyFilterAndSort();
     ensureDashboardAnalysisVisible();
     renderTablePage();
+    // 切换工作表时重置图表类型为自动，让每个工作表用最合适的默认图类型
+    const chartTypeEl = document.getElementById("chart-type");
+    if (chartTypeEl) chartTypeEl.value = "auto";
     stopCarousel();
     startCarousel();
     renderMainChart();
@@ -3631,7 +3226,7 @@ function buildGroupPanel(groups, type) {
         renderMainChart();
     };
     if (resetBtn) resetBtn.onclick = () => {
-        selectedGroups = allRegionList.length ? [allRegionList[0]] : [];
+        selectedGroups = allRegionList.slice(0, 3);
         renderRegionList();
         renderMainChart();
     };
@@ -3670,9 +3265,8 @@ function renderMainChart() {
     
     let chartType = document.getElementById("chart-type")?.value || "auto";
     if (chartType === "auto") chartType = (dimType === "nation" ? "area" : "bar");
-    const isArea = chartType === "area" || chartType === "area-stack";
-    const isStack = chartType === "area-stack";
-    const echartsType = isArea ? "line" : chartType;
+    const isArea = chartType === "area";
+    const echartsType = isArea ? "line" : "bar";
     
     const metric = valueFields[currentMetricIndex];
     if (!metric) return;
@@ -3696,21 +3290,33 @@ function renderMainChart() {
                 borderColor: '#667eea',
                 textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
             },
-            legend: { 
-                data: [metric], 
+            legend: {
+                data: [metric],
                 top: 30,
                 textStyle: { color: isDark ? '#dbeafe' : '#263b59' }
             },
-            xAxis: { 
-                type: "category", 
-                data: years, 
+            grid: {
+                top: 70,
+                left: '12%',
+                right: '4%',
+                bottom: '12%',
+                containLabel: true
+            },
+            xAxis: {
+                type: "category",
+                data: years,
                 name: custom.xName !== "auto" ? custom.xName : "年份",
                 axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
-                axisLabel: { color: isDark ? '#dbeafe' : '#263b59' }
+                axisLabel: { color: isDark ? '#dbeafe' : '#263b59', hideOverlap: true }
             },
-            yAxis: { 
-                name: custom.yName !== "auto" ? custom.yName : metric, 
-                min: 0, 
+            yAxis: {
+                name: (() => {
+                    const n = custom.yName !== "auto" ? custom.yName : metric;
+                    return n.length > 10 ? n.slice(0, 10) + '…' : n;
+                })(),
+                nameLocation: 'middle',
+                nameGap: 50,
+                min: 0,
                 max: custom.yMax !== "auto" ? Number(custom.yMax) : null,
                 axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
                 axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
@@ -3718,7 +3324,7 @@ function renderMainChart() {
             },
             series: [{
                 name: metric,
-                type: echartsType || chartType,
+                type: echartsType,
                 data,
                 smooth: true,
                 color: COLORS[0],
@@ -3727,12 +3333,7 @@ function renderMainChart() {
                         { offset: 0, color: 'rgba(102,126,234,0.45)' },
                         { offset: 1, color: 'rgba(102,126,234,0.03)' }
                     ])
-                } : {
-                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                        { offset: 0, color: 'rgba(102,126,234,0.3)' },
-                        { offset: 1, color: 'rgba(102,126,234,0.05)' }
-                    ])
-                }
+                } : undefined
             }]
         }, false);
         return;
@@ -3748,18 +3349,17 @@ function renderMainChart() {
         });
         series.push({
             name: grp,
-            type: echartsType || chartType,
+            type: echartsType,
             data,
             smooth: true,
             color: COLORS[idx % COLORS.length],
-            stack: isStack ? 'total' : undefined,
             areaStyle: isArea ? {
                 color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
                     { offset: 0, color: COLORS[idx % COLORS.length].replace(')', ',0.4)').replace('rgb', 'rgba') },
                     { offset: 1, color: COLORS[idx % COLORS.length].replace(')', ',0.02)').replace('rgb', 'rgba') }
                 ]),
-                opacity: isStack ? 0.8 : 0.35
-            } : (chartType === 'line' ? { opacity: 0.1 } : undefined)
+                opacity: 0.35
+            } : undefined
         });
     });
     
@@ -3776,29 +3376,45 @@ function renderMainChart() {
             borderColor: '#667eea',
             textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
         },
-        legend: (dimType === "city") ? { show: false } : { 
-            data: selectedGroups, 
-            top: 30, 
+        legend: {
+            data: selectedGroups,
+            top: 30,
             type: "scroll",
-            textStyle: { color: isDark ? '#dbeafe' : '#263b59' }
+            pageIconSize: 10,
+            pageTextStyle: { fontSize: 11, color: isDark ? '#8fa6c8' : '#718096' },
+            textStyle: { color: isDark ? '#dbeafe' : '#263b59', fontSize: 12 },
+            formatter: (name) => name.length > 8 ? name.slice(0, 8) + '…' : name
         },
-        xAxis: { 
-            type: "category", 
-            data: years, 
+        grid: {
+            top: 70,
+            left: '12%',
+            right: '4%',
+            bottom: '12%',
+            containLabel: true
+        },
+        xAxis: {
+            type: "category",
+            data: years,
             name: "年份",
             axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
-            axisLabel: { color: isDark ? '#dbeafe' : '#263b59' }
+            axisLabel: { color: isDark ? '#dbeafe' : '#263b59', hideOverlap: true }
         },
-        yAxis: { 
-            name: custom.yName !== "auto" ? custom.yName : metric, 
-            min: 0, 
+        yAxis: {
+            name: (() => {
+                const n = custom.yName !== "auto" ? custom.yName : metric;
+                return n.length > 10 ? n.slice(0, 10) + '…' : n;
+            })(),
+            nameTooltip: custom.yName !== "auto" ? custom.yName : metric,
+            nameLocation: 'middle',
+            nameGap: 50,
+            min: 0,
             max: custom.yMax !== "auto" ? Number(custom.yMax) : null,
             axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
             axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
             splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
         },
         series: series
-    }, false);
+    }, true);
 }
 
 // ======================= 轮播控制 =======================
@@ -5185,8 +4801,6 @@ function hasPotentialMissingValueProcessingFromRows(rows, headers) {
     });
 }
 
-function dataProcessingNoticeHtml() { return ''; }
-
 // ── 查看大图辅助 ──────────────────────────────────────
 function _addViewFullBtn(chartDom, onClick) {
     const old = chartDom.parentElement?.querySelector('.view-full-btn');
@@ -5895,10 +5509,12 @@ function bindEvents() {
         const xName = document.getElementById("x-name");
         const yName = document.getElementById("y-name");
         const yMax = document.getElementById("y-max");
+        const chartTypeEl = document.getElementById("chart-type");
         if (chartTitle) chartTitle.value = "";
         if (xName) xName.value = "";
         if (yName) yName.value = "";
         if (yMax) yMax.value = "";
+        if (chartTypeEl) chartTypeEl.value = "auto";
         renderMainChart();
     });
     
@@ -6052,36 +5668,6 @@ function dismissToast(toast) {
 
 // ======================= 启动 =======================
 
-function executeAgentUiActions(data, question, sourceBubble) {
-    if (!sourceBubble) return;
-    const hasChart = !!(data?.chart && data.chart.metric);
-    const hasDataContext = hasChart || (Array.isArray(data?.citations) && data.citations.length > 0) || data?.data || data?.table;
-    const q = String(question || '');
-    const wantsExport = /导出|下载|保存|生成文件|Excel|CSV|PNG|JPG|SVG/i.test(q);
-    const wantsReport = /报告|分析报告|总结文档|生成总结|生成分析/.test(q);
-    if (!hasDataContext && !wantsExport && !wantsReport) return;
-    if (sourceBubble.querySelector('.agent-ui-actions')) return;
-
-    const actions = [];
-    actions.push({ id: 'open-data-table', label: '跳转明细表' });
-    if (hasChart) actions.push({ id: 'inline-chart', label: '展开图表' });
-    if (hasChart) actions.push({ id: 'export-inline-chart', label: '导出图表 PNG' });
-    if (wantsExport) actions.push({ id: 'export-chat-table', label: '导出回答 CSV' });
-    actions.push({ id: 'report-html', label: '生成报告 DOCX' });
-
-    const box = document.createElement('div');
-    box.className = 'agent-ui-actions';
-    box._agentData = data;
-    box._agentQuestion = question || '';
-    box.innerHTML = `
-        <div class="agent-ui-action-title">可执行操作</div>
-        <div class="agent-ui-action-row">
-            ${actions.map(action => `<button type="button" class="agent-action-btn" data-agent-action="${action.id}">${escapeHtml(action.label)}</button>`).join('')}
-        </div>
-    `;
-    sourceBubble.appendChild(box);
-}
-
 function renderAgentChartInsideBubble(bubble, config) {
     if (!bubble || !config?.metric) return null;
     let wrap = bubble.querySelector('.agent-inline-chart-wrap');
@@ -6145,16 +5731,106 @@ document.addEventListener('click', function(e) {
     if (action === 'export-inline-chart') exportNearestAgentChart(bubble, data.chart);
     if (action === 'export-chat-table') exportAnswerAsCsv(data);
     if (action === 'report-html') agentGenerateReport(data, question);
-    if (action === 'open-data-table') jumpToDataTableFromAgent();
+    if (action === 'open-data-table') toggleInlineDataTable(bubble, data.chart);
 });
 
-function jumpToDataTableFromAgent() {
-    closeRagFullscreen();
-    setTimeout(() => {
-        toggleTableSection(true); // 自动展开数据明细表
-        const table = document.getElementById('section-table');
-        if (table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 260);
+/* ── 内联数据明细表 ─────────────────────────────────────── */
+function buildTableRows(config) {
+    if (!window.workbook || !config?.metric) return { headers: [], rows: [] };
+
+    const metric   = config.metric;
+    const regions  = config.regions || [];
+    const years    = config.years   || [];
+    const NATIONAL = ['全国', '全国平均', '全国总计', '全国合计'];
+    const useNat   = !regions.length || regions.every(r => NATIONAL.includes(r));
+    const srcRows  = useNat
+        ? (window.workbook['全国'] || [])
+        : (window.workbook['省份'] || []);
+
+    // 模糊匹配字段名
+    const cleanT = metric.replace(/[（(].*?[）)]/g, '').trim();
+    const realKey = Object.keys(srcRows[0] || {}).find(k => {
+        const c = k.replace(/[（(].*?[）)]/g, '').trim();
+        return k === metric || c === cleanT || k.includes(cleanT) || cleanT.includes(c);
+    }) || metric;
+
+    const allYears = years.length ? years
+        : [...new Set(srcRows.map(r => r['年份']))].sort();
+
+    // 排名图（bar）：横向，列=地区
+    if (config.type === 'bar' && allYears.length === 1) {
+        const year = allYears[0];
+        const targetRegions = regions.length ? regions
+            : [...new Set(srcRows.map(r => r['地区']))];
+        const rows = targetRegions.map((reg, i) => {
+            const row = srcRows.find(r => r['地区'] === reg && r['年份'] === year);
+            const val = row ? row[realKey] : null;
+            return [i + 1, reg, val == null ? '—' : val];
+        }).filter(r => r[2] !== '—');
+        return { headers: ['排名', '地区', metric], rows };
+    }
+
+    // 趋势图（line）或全国：纵向，行=年份，列=地区
+    const targetRegions = useNat ? ['全国']
+        : (regions.length ? regions : [...new Set(srcRows.map(r => r['地区']))].slice(0, 6));
+
+    const headers = ['年份', ...targetRegions];
+    const rows = allYears.map(yr => {
+        const cells = [yr];
+        targetRegions.forEach(reg => {
+            const r = useNat
+                ? srcRows.find(row => row['年份'] === yr)
+                : srcRows.find(row => row['地区'] === reg && row['年份'] === yr);
+            const v = r ? r[realKey] : null;
+            cells.push(v == null ? '—' : v);
+        });
+        return cells;
+    });
+    return { headers, rows };
+}
+
+function toggleInlineDataTable(bubble, config) {
+    if (!bubble || !config?.metric) return;
+    let wrap = bubble.querySelector('.inline-data-table-wrap');
+    if (wrap) { wrap.remove(); return; }   // 二次点击收起
+
+    const { headers, rows } = buildTableRows(config);
+    if (!rows.length) { showToast('当前查询无可展示的明细数据', 'warn'); return; }
+
+    const thHtml  = headers.map(h => `<th>${escapeHtml(String(h))}</th>`).join('');
+    const trHtml  = rows.map(r =>
+        `<tr>${r.map(c => `<td>${escapeHtml(String(c))}</td>`).join('')}</tr>`
+    ).join('');
+
+    wrap = document.createElement('div');
+    wrap.className = 'inline-data-table-wrap';
+    wrap.innerHTML = `
+        <div class="idt-header">
+            <span class="idt-title">📋 数据明细 · ${escapeHtml(config.metric)}</span>
+            <button class="idt-dl-btn" data-idt-dl>⬇ 下载 Excel</button>
+        </div>
+        <div class="idt-scroll">
+            <table class="idt-table">
+                <thead><tr>${thHtml}</tr></thead>
+                <tbody>${trHtml}</tbody>
+            </table>
+        </div>`;
+
+    wrap._idtConfig = config;
+    wrap._idtHeaders = headers;
+    wrap._idtRows = rows;
+
+    const actions = bubble.querySelector('.agent-ui-actions');
+    bubble.insertBefore(wrap, actions || null);
+
+    // 下载 Excel（用 XLSX 库）
+    wrap.querySelector('[data-idt-dl]').addEventListener('click', () => {
+        if (!window.XLSX) { showToast('Excel 库未加载', 'warn'); return; }
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, config.metric.slice(0, 31));
+        XLSX.writeFile(wb, `${config.metric}_明细_${Date.now()}.xlsx`);
+    });
 }
 
 // Final closeout overrides: DOCX export and fullscreen scatter inspection.
@@ -6345,7 +6021,7 @@ function executeAgentUiActions(data, question, sourceBubble) {
     const actions = [];
     if (hasChart) actions.push({ id: 'inline-chart', label: '展开图表', icon: 'chart' });
     if (hasChart) actions.push({ id: 'chart-modal', label: '大图查看', icon: 'expand' });
-    if (data?.data || data?.table) actions.push({ id: 'open-data-table', label: '查看明细', icon: 'table' });
+    if (hasChart) actions.push({ id: 'open-data-table', label: '数据明细', icon: 'table' });
     if (hasChart) actions.push({ id: 'export-inline-chart', label: '导出 PNG', icon: 'download' });
     if (wantsExport) actions.push({ id: 'export-chat-table', label: '导出 CSV', icon: 'download' });
     actions.push({ id: 'report-html', label: '生成报告', icon: 'report' });
@@ -6466,7 +6142,6 @@ function initSdufeLogoBubble() {
 waitForWorkbook();
 bindEvents();
 initSdufeCover();
-refineLandingCapabilities();
 refineRagCapabilityBadges();
 initSheetSwitchGuide();
 initPaginationGuide();

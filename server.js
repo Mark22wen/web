@@ -30,7 +30,7 @@ const MAX_SESSIONS = Math.max(10, parseInt(process.env.MAX_SESSIONS || '500', 10
 const DISABLE_HISTORY = process.env.DISABLE_HISTORY === 'true';
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || process.env.MODEL_NAME || 'deepseek-r1:7b';
-const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
+const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'bge-m3';
 const OLLAMA_TIMEOUT_MS = parseInt(process.env.OLLAMA_TIMEOUT_MS || '120000', 10);
 const OLLAMA_FAST_MODEL = process.env.OLLAMA_FAST_MODEL || 'deepseek-r1:7b';
 
@@ -2026,10 +2026,28 @@ async function answerEvidenceChat(question, entities, recentHistory = []) {
     const chromaText = chromaEvidence.map((doc, i) =>
         `[V${i + 1}] ${doc.text.slice(0, 2000)}`
     ).join('\n');
-    const historyText = recentHistory
-        .slice(-6)
-        .map(m => `${m.role === 'user' ? '用户' : '助手'}：${String(m.content || '').slice(0, 220)}`)
-        .join('\n');
+    // 主题延续检测：追问短句 OR 关键词重叠 → 视为延续
+    const lastUserMsg = [...recentHistory].reverse().find(h => h.role === 'user');
+    const isTopicContinued = (() => {
+        if (!lastUserMsg) return false;
+        if (question.length <= 12) return true;
+        if (/^(那|换|再|还有|那么|还是|另外)/.test(question)) return true;
+        if (/呢[？?]?$/.test(question)) return true;
+        if (/(这个|该|上面|上述|它的|其中|上一|前面|刚才|之前)/.test(question)) return true;
+        const hasRegion = Object.keys(REGION_MAP).some(r => question.includes(r)) || /全国/.test(question);
+        const hasMetric = metricNameList.some(m => question.includes(cleanMetricName(m)));
+        if (hasRegion && !hasMetric) return true;
+        const prev = String(lastUserMsg.content || '');
+        const keywords = (s) => [...s.matchAll(/[一-龥]{2,}/g), ...s.matchAll(/\d{4}/g)].map(m => m[0]);
+        const prevKw = new Set(keywords(prev));
+        return keywords(question).some(kw => prevKw.has(kw));
+    })();
+    const historyText = isTopicContinued
+        ? recentHistory
+            .slice(-6)
+            .map(m => `${m.role === 'user' ? '用户' : '助手'}：${String(m.content || '').slice(0, 220)}`)
+            .join('\n')
+        : '';
 
     let answer = '';
     let usedModel = false;
@@ -2389,7 +2407,7 @@ async function synthesizeConversationalAnswer(question, draftAnswer, context = {
 6. 追问建议只能围绕当前平台已有口径：全国、省份、地级市、年份、已存在指标、趋势、排名、对比、预测、方法说明。
 7. 中文回答，结构清楚，适度简洁。
 8. 列举多个要点时，使用"一、二、三"或"①②③"等中文序号，不要使用"1. 2. 3."的 Markdown 有序列表格式（前端不渲染 Markdown）。
-9. 如果回答用到了报告内容，在回答末尾单独一行标注来源，格式：📄 来源：《报告名》第N页。如提供了 URL，格式为：📄 来源：《报告名》第N页（/资料/文件名.pdf#page=N）。最多标注3个来源。
+9. ${(context.resultType === 'forecast' || context.resultType === 'compare') ? '本次回答的数据来源是预测模型（已在草稿中标注），不要在末尾添加"📄 来源"行，不要引用任何报告页码作为数据来源。报告内容仅供背景参考，不作为预测结果的引用依据。' : '如果回答用到了报告内容，在回答末尾单独一行标注来源，格式：📄 来源：《报告名》第N页。如提供了 URL，格式为：📄 来源：《报告名》第N页（/资料/文件名.pdf#page=N）。最多标注3个来源。'}
 
 用户问题：${question}
 工具与方法轨迹：${JSON.stringify(context.toolTrace || []).slice(0, 1200)}
@@ -3566,15 +3584,39 @@ async function llmDecideAction(question, recentHistory = [], lastMethod = null) 
     const latestYear = getLatestYear(rawDataCache.province);
     const allMetrics = metricNameList.map(m => cleanMetricName(m)).join('、');
 
-    // 构建完整的上下文历史
-    const historyText = recentHistory.slice(-8).map(h => {
+    // 主题延续检测：追问短句 OR 关键词重叠 → 视为延续
+    const lastUserTurn = [...recentHistory].reverse().find(h => h.role === 'user');
+    const isContinued = (() => {
+        if (!lastUserTurn) return false;
+        // ① 短句（≤12字）或以追问词开头/结尾 → 几乎必然是延续
+        if (question.length <= 12) return true;
+        if (/^(那|换|再|还有|那么|还是|另外)/.test(question)) return true;
+        if (/呢[？?]?$/.test(question)) return true;
+        // ② 含指代词 → 指向上文
+        if (/(这个|该|上面|上述|它的|其中|上一|前面|刚才|之前)/.test(question)) return true;
+        // ③ 问题只含地区/年份，未提任何指标 → 指标需从上文继承
+        const hasRegion = Object.keys(REGION_MAP).some(r => question.includes(r)) || /全国/.test(question);
+        const hasMetric = metricNameList.some(m => question.includes(cleanMetricName(m)));
+        if (hasRegion && !hasMetric) return true;
+        // ④ 长句做关键词重叠判断
+        const prev = String(lastUserTurn.content || '');
+        const keywords = (s) => [...s.matchAll(/[一-龥]{2,}/g), ...s.matchAll(/\d{4}/g)].map(m => m[0]);
+        const prevKw = new Set(keywords(prev));
+        return keywords(question).some(kw => prevKw.has(kw));
+    })();
+
+    // 话题不连续时只保留最近2轮（保留基本会话感知但不干扰决策）
+    const historySlice = isContinued ? recentHistory.slice(-8) : recentHistory.slice(-2);
+    const historyText = historySlice.map(h => {
         const role = h.role === 'user' ? '用户' : '助手';
         const content = String(h.content || '').slice(0, 300);
         return `${role}: ${content}`;
     }).join('\n');
 
-    // 上一轮方法摘要
-    const lastMethodText = lastMethod ? `上一轮分析：${lastMethod.type}，指标=${lastMethod.params?.metric || ''}，地区=${lastMethod.params?.region || lastMethod.regions?.[0] || ''}，年份=${lastMethod.params?.targetYear || lastMethod.params?.year || ''}` : '无';
+    // 话题不连续时不传上一轮方法摘要（避免错误继承指标/地区）
+    const lastMethodText = (isContinued && lastMethod)
+        ? `上一轮分析：${lastMethod.type}，指标=${lastMethod.params?.metric || ''}，地区=${lastMethod.params?.region || lastMethod.regions?.[0] || ''}，年份=${lastMethod.params?.targetYear || lastMethod.params?.year || ''}`
+        : '无';
 
     const prompt = `你是山东财经大学科研教育人才数据平台的智能分析助手。请理解用户问题的真实意图，决定下一步行动。
 
@@ -3955,15 +3997,18 @@ async function runAgent(question, recentHistory = []) {
     // ── Step 1: LLM 决策 ──────────────────────────────
     const llmDecision = await llmDecideAction(q, recentHistory, lastMethod);
 
-    // LLM 要求追问——先判断是否能从知识文档回答，能则优先走 evidence_chat
+    // LLM 要求追问——先做 ChromaDB 向量探针，有结果则走 evidence_chat，无结果再追问
     if (llmDecision?.action === 'ask_clarification') {
         const clarification = llmDecision.clarification || '请补充更多信息，例如具体地区、年份或指标。';
-        // 如果问题涉及非中国地区或全球话题，尝试从报告/白皮书回答
-        const mightBeInDocs = GLOBAL_COUNTRIES_RE.test(q) || /白皮书|报告|指数/.test(q);
-        if (mightBeInDocs) {
-            console.log('🔄 ask_clarification 转 evidence_chat（可能在知识文档中）:', q);
-            const entities = await extractEntitiesAsync(q, recentHistory, llmDecision);
-            return answerEvidenceChat(q, entities, recentHistory);
+        // 用向量相似度探测知识文档，不依赖关键词
+        const probeEntities = await extractEntitiesAsync(q, recentHistory, llmDecision);
+        const probeHits = await retrieveChromaEvidence(q, probeEntities, 3).catch(() => []);
+        const hasKnowledgeHit = probeHits.some(d =>
+            (d.metadata?.table === 'knowledge' || d.source === 'ChromaDB') && (d.distance == null || d.distance < 0.55)
+        );
+        if (hasKnowledgeHit) {
+            console.log('🔄 ask_clarification 转 evidence_chat（ChromaDB 向量命中）:', q);
+            return answerEvidenceChat(q, probeEntities, recentHistory);
         }
         console.log('❓ LLM要求追问:', clarification);
         return {
@@ -3977,13 +4022,16 @@ async function runAgent(question, recentHistory = []) {
         };
     }
 
-    // LLM 决定直接聊天——先判断是否能从知识文档回答
+    // LLM 决定直接聊天——先做 ChromaDB 向量探针，有结果则走 evidence_chat
     if (llmDecision?.action === 'answer_directly' || llmDecision?.tool === 'chat') {
-        const mightBeInDocs = GLOBAL_COUNTRIES_RE.test(q) || /白皮书|报告|指数|文献/.test(q);
-        if (mightBeInDocs) {
-            console.log('🔄 chat 转 evidence_chat（可能在知识文档中）:', q);
-            const entities = await extractEntitiesAsync(q, recentHistory, llmDecision);
-            return answerEvidenceChat(q, entities, recentHistory);
+        const probeEntities = await extractEntitiesAsync(q, recentHistory, llmDecision);
+        const probeHits = await retrieveChromaEvidence(q, probeEntities, 3).catch(() => []);
+        const hasKnowledgeHit = probeHits.some(d =>
+            (d.metadata?.table === 'knowledge' || d.source === 'ChromaDB') && (d.distance == null || d.distance < 0.55)
+        );
+        if (hasKnowledgeHit) {
+            console.log('🔄 chat 转 evidence_chat（ChromaDB 向量命中）:', q);
+            return answerEvidenceChat(q, probeEntities, recentHistory);
         }
         return answerGeneralChat(q, recentHistory);
     }
@@ -4412,7 +4460,7 @@ app.post('/api/agent', async (req, res) => {
 
 // ── 流式 SSE 端点 ──────────────────────────────────────────────
 app.post('/api/agent/stream', async (req, res) => {
-    const { question, sessionId } = req.body || {};
+    const { question, sessionId, followupContext } = req.body || {};
     const questionError = validateQuestion(question);
     if (questionError) return res.status(400).json({ error: questionError });
     const cleanSessionId = sanitizeSessionId(sessionId);
@@ -4440,6 +4488,12 @@ app.post('/api/agent/stream', async (req, res) => {
 
     try {
         const history = getSessionHistory(cleanSessionId);
+        // 若用户追问的是历史某条回答，把该 Q+A 追加到 history 末尾作为临时锚点
+        // 这样 expandShortFollowup 能正确理解"那上海呢"指的是哪个话题
+        if (followupContext && typeof followupContext === 'string') {
+            const anchor = followupContext.slice(0, 300);
+            history.push({ role: 'assistant', content: `[追问锚点] ${anchor}` });
+        }
         const result = await runAgentBatch(question.trim(), history);
         clearInterval(statusTimer);
 
@@ -4459,6 +4513,7 @@ app.post('/api/agent/stream', async (req, res) => {
             suggestions:  result.suggestions  || [],
             toolTrace:    result.toolTrace    || [],
             chart:        result.chart        || null,
+            hasData:      !!result.data,
             confidence:   result.confidence   || null,
             wantsTable:   result.wantsTable   || false,
             wantsScatter: result.wantsScatter || false,

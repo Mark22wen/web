@@ -4,7 +4,7 @@
  *
  * 功能：
  *  1. 把全国/省份/地级市的结构化数据转成自然语言段落
- *  2. 用 nomic-embed-text 生成 embedding
+ *  2. 用 bge-m3 生成 embedding
  *  3. 批量写入 ChromaDB（自动跳过已存在的 ID，支持断点续传）
  */
 
@@ -15,7 +15,7 @@ const path = require('path');
 
 // ========== 配置 ==========
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
+const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'bge-m3';
 const CHROMA_HOST = process.env.CHROMA_HOST || 'localhost';
 const CHROMA_PORT = parseInt(process.env.CHROMA_PORT || '8000', 10);
 const COLLECTION_NAME = 'patent_knowledge';
@@ -257,12 +257,12 @@ async function main() {
     try {
         const testEmb = await getEmbedding('测试');
         console.log(`  ✅ embedding 维度: ${testEmb.length}`);
-        if (testEmb.length !== 768) {
-            console.warn(`  ⚠️  维度是 ${testEmb.length}，ChromaDB 集合期望 768，可能需要重建集合`);
+        if (testEmb.length !== 1024) {
+            console.warn(`  ⚠️  维度是 ${testEmb.length}，bge-m3 期望 1024，请确认模型正确`);
         }
     } catch (err) {
         console.error('  ❌ Ollama embedding 失败:', err.message);
-        console.error('  请确认 Ollama 正在运行且 nomic-embed-text 已安装');
+        console.error('  请确认 Ollama 正在运行且 bge-m3 已安装（ollama pull bge-m3）');
         process.exit(1);
     }
 
