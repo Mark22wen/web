@@ -1283,9 +1283,6 @@ async function sendRagMessage() {
         const finalAnswer = streamText || data.answer || '无回答';
         data.answer = finalAnswer; // 供报告导出使用
         html += `<div class="rag-answer-content">${formatAnswer(finalAnswer)}</div>`;
-        if (hasPotentialMissingValueProcessingFromText(finalAnswer)) {
-            html += dataProcessingNoticeHtml();
-        }
         
         // 引用
         if (data.citations && data.citations.length > 0) {
@@ -1487,12 +1484,6 @@ function addRagMessage(role, content, isPlaceholder = false) {
     return div.querySelector('.rag-bubble');
 }
 
-function updateRagHistory() {
-    // Now handled by renderSessionList()
-    const session = getCurrentSession();
-    if (session) renderSessionList();
-}
-
 // 事件委托：历史记录点击（全局只注册一次）
 (function(){
     let _histDelegateReady = false;
@@ -1515,36 +1506,6 @@ function updateRagHistory() {
         setupHistDelegate();
     }
 })();
-
-// ======================= 原有聊天面板兼容（隐藏，用新版替代）=======================
-
-const chatMessages = document.getElementById('chat-messages');
-const chatInput = document.getElementById('chat-input');
-const chatSend = document.getElementById('chat-send');
-const chatStop = document.getElementById('chat-stop');
-
-let currentController = null;
-
-function addMessage(role, content, isStreaming = false) {
-    if (!chatMessages) return null;
-    
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `chat-message ${role}`;
-    messageDiv.innerHTML = `<div class="message-role">${role === 'user' ? '👤 你' : '🤖 助手'}</div><div class="message-content">${content}</div>`;
-    chatMessages.appendChild(messageDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-    
-    if (isStreaming) {
-        return (newContent) => {
-            const contentDiv = messageDiv.querySelector('.message-content');
-            if (contentDiv) {
-                contentDiv.innerHTML = formatAnswer(newContent);
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-            }
-        };
-    }
-    return null;
-}
 
 // ======================= Agent 内联图表渲染（在对话气泡中直接显示）=======================
 
@@ -1775,14 +1736,15 @@ function _doRenderInlineChart(chartId, config, isModal) {
     }
     
     // CRITICAL: never set inline width - that causes bubble to stretch to full page width.
-    // CSS width:100% on .rag-inline-chart handles width correctly.
-    // Only ensure height is explicit.
-    chartDom.style.height = isModal ? '500px' : '280px';
-    
+    // CSS width:100% on .agent-inline-chart handles width correctly.
+    // Modal height is set explicitly; inline height is controlled by CSS !important (340px).
+    if (isModal) chartDom.style.height = '500px';
+
     // Read the actual rendered width from the wrap container (not chartDiv itself)
-    const wrapEl = isModal ? chartDom.parentElement : chartDom.closest('.rag-inline-chart-wrap');
+    const wrapEl = isModal ? chartDom.parentElement : chartDom.closest('.agent-inline-chart-wrap');
     const measuredW = wrapEl ? wrapEl.clientWidth : (chartDom.clientWidth || 480);
-    const measuredH = isModal ? 500 : 280;
+    // For inline charts, read the CSS-applied height rather than hardcoding 280
+    const measuredH = isModal ? 500 : (chartDom.offsetHeight || 340);
     
     // Init echarts - pass explicit height, let width be measured
     const chart = initEChartSafe(chartDom, { 
@@ -1953,27 +1915,33 @@ function _doRenderInlineChart(chartId, config, isModal) {
     const chartType = config.type || 'line';
     let years = config.years || [];
     const regions = config.regions || [];
-    
-    const provinceRows = window.workbook['省份'];
+
+    const provinceRows = window.workbook['省份'] || [];
+    const cityRows     = window.workbook['地级市'] || [];
     const nationalRows = window.workbook['全国'] || [];
-    
-    // Fuzzy field matching
-    const sampleRow = provinceRows[0] || {};
+
+    // Determine data source: national / city / province
+    const NATIONAL_NAMES = ['全国', '全国平均', '全国总计', '全国合计'];
+    const useNational = (!regions.length || regions.every(r => NATIONAL_NAMES.includes(r)))
+                        && nationalRows.length > 0;
+    const firstRegion = regions.find(r => !NATIONAL_NAMES.includes(r));
+    const useCity = !useNational && !!firstRegion
+                    && cityRows.some(r => r['地区'] === firstRegion)
+                    && !provinceRows.some(r => r['地区'] === firstRegion);
+
+    // Fuzzy field matching against the right sheet
+    const baseSheet = useNational ? nationalRows : (useCity ? cityRows : provinceRows);
+    const sampleRow = baseSheet[0] || {};
     const cleanTarget = metric.replace(/[（(].*?[）)]/g, '').trim();
     const realMetric = Object.keys(sampleRow).find(k => {
         const cleanK = k.replace(/[（(].*?[）)]/g, '').trim();
         return k === metric || cleanK === cleanTarget || k.includes(cleanTarget) || cleanTarget.includes(cleanK);
     }) || metric;
-    
-    let filteredRows = provinceRows;
-    
-    // Fix: treat regions:['全国'] as national data
-    const NATIONAL_NAMES = ['全国', '全国平均', '全国总计', '全国合计'];
-    const useNational = (!regions.length || regions.every(r => NATIONAL_NAMES.includes(r)))
-                        && nationalRows.length > 0;
-    
+
+    let filteredRows = useCity ? cityRows : provinceRows;
+
     if (!years.length) {
-        const baseRows = useNational ? nationalRows : (regions.length ? provinceRows.filter(r => regions.includes(r['地区'])) : provinceRows);
+        const baseRows = useNational ? nationalRows : (regions.length ? filteredRows.filter(r => regions.includes(r['地区'])) : filteredRows);
         years = [...new Set(baseRows.map(r => r['年份']))].sort();
         if (years.length > 20) years = years.slice(-20); // cap at 20 years for very long ranges
     }
@@ -2117,67 +2085,6 @@ function autoGenerateChart(question, targetBubble) {
 
 // ======================= 原有聊天功能兼容 =======================
 
-async function sendMessage() {
-    if (typeof stopCarousel === 'function') stopCarousel();
-    
-    const question = chatInput?.value.trim();
-    if (!question) return;
-
-    addMessage('user', escapeHtml(question));
-    if (chatInput) chatInput.value = '';
-    if (chatInput) chatInput.style.height = 'auto';
-
-    if (chatSend) chatSend.disabled = true;
-    if (chatStop) chatStop.disabled = false;
-
-    const updateAssistant = addMessage('assistant', '思考中...', true);
-    let fullAnswer = '';
-
-    currentController = new AbortController();
-    const signal = currentController.signal;
-
-    try {
-        const response = await fetch('/api/agent', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question, sessionId: currentSessionId || 'legacy_chat' }),
-            signal
-        });
-
-        const data = await response.json();
-
-        const answer = data.answer || '无回答';
-        if (updateAssistant) updateAssistant(answer);
-        fullAnswer = answer;
-
-        if (data.chart && data.chart.metric) {
-            console.log('📊 收到图表配置:', data.chart);
-            renderAgentChart(data.chart);
-        } else if (/趋势|分析|变化|走势/.test(question)) {
-            autoGenerateChart(question);
-        }
-        setTimeout(() => executeAgentUiActions(data, question, null), 180);
-
-    } catch (err) {
-        if (err.name === 'AbortError') {
-            if (updateAssistant) updateAssistant(fullAnswer + '\n\n[已停止生成]');
-        } else {
-            console.error(err);
-            if (updateAssistant) updateAssistant('连接失败，请确保后端已启动');
-        }
-    } finally {
-        if (chatSend) chatSend.disabled = false;
-        if (chatStop) chatStop.disabled = true;
-        currentController = null;
-    }
-}
-
-function stopGeneration() {
-    if (currentController) {
-        currentController.abort();
-    }
-}
-
 function formatAnswer(text) {
     if (!text) return '';
     let t = escapeHtml(text);
@@ -2245,84 +2152,6 @@ function formatAnswer(text) {
     t = t.replace(/(<\/(?:table|ul|ol|h[1-6]|blockquote)>)<br>/g, '$1');
 
     return t;
-}
-
-async function clearConversation() {
-    // Clear current RAG session (new multi-session system)
-    if (currentSessionId) {
-        try {
-            await fetch('/api/clear_history', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId: currentSessionId })
-            });
-        } catch(err) {
-            console.warn('清空服务端历史失败(非致命):', err);
-        }
-        // Clear current session messages in memory
-        const session = getCurrentSession();
-        if (session) {
-            session.messages = [];
-            saveSessions();
-        }
-        // Reset the chat UI to welcome screen
-        const container = document.getElementById('rag-messages');
-        if (container) {
-            const _prov = (window.workbook || {})['省份'] || [];
-            const _yrs = [...new Set(_prov.map(r => r['年份']).filter(Boolean))].sort((a,b)=>b-a);
-            const _ly = _yrs[0] || (new Date().getFullYear() - 1);
-            const _ny = _ly + 2;
-            container.innerHTML = `<div class="rag-welcome">
-                <div class="rag-welcome-avatar">
-                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg>
-                </div>
-                <h2>科研教育人才一体化平台智能助手</h2>
-                <p>查询数据 · 分析趋势 · 对比地区 · 预测未来 · 了解人才体系 · 查阅报告内容<br>回答基于平台结构化数据与知识文档，附带来源溯源。</p>
-                <div class="rag-welcome-hints">
-                    <button class="rag-hint-btn" onclick="sendRagQuick('${_ly}年各省杰青数量前10排名')">
-                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
-                        ${_ly}年各省杰青排名
-                    </button>
-                    <button class="rag-hint-btn" onclick="sendRagQuick('近5年全国长江学者数量趋势')">
-                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-trend"/></svg>
-                        近5年长江学者趋势
-                    </button>
-                    <button class="rag-hint-btn" onclick="sendRagQuick('杰青和优青有什么区别？')">
-                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg>
-                        杰青与优青的区别
-                    </button>
-                    <button class="rag-hint-btn" onclick="sendRagQuick('四大青年人才包括哪些称号？')">
-                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>
-                        四大青人才称号
-                    </button>
-                </div>
-            </div>`;
-        }
-        // Update hint bar
-        const hint = document.getElementById('rag-context-hint');
-        if (hint) hint.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg><span>支持上下文追问 · 可查数据也可问知识 · 无地区时默认全国数据</span>';
-        renderSessionList();
-        showToast('对话已清空', 'success', 2000);
-        return;
-    }
-    // Legacy chat fallback
-    try {
-        const response = await fetch('/api/clear_history', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionId: 'legacy_chat' })
-        });
-        if (response.ok) {
-            if (chatMessages) chatMessages.innerHTML = '';
-            const systemMsg = document.createElement('div');
-            systemMsg.className = 'chat-message assistant';
-            systemMsg.innerHTML = `<div class="message-role">🤖 系统</div><div class="message-content">对话历史已清空。</div>`;
-            chatMessages?.appendChild(systemMsg);
-            if (chatMessages) chatMessages.scrollTop = chatMessages.scrollHeight;
-        }
-    } catch (err) {
-        console.error('清空对话请求错误:', err);
-    }
 }
 
 // ======================= 数据加载 =======================
@@ -2569,9 +2398,10 @@ async function init() {
                 if (!c || c.isDisposed()) return;
                 const dom = c.getDom();
                 const isModalChart = id === 'chart-modal-chart';
-                const wrap = isModalChart ? dom?.parentElement : dom?.closest('.rag-inline-chart-wrap');
+                const wrap = isModalChart ? dom?.parentElement : dom?.closest('.agent-inline-chart-wrap, .rag-inline-chart-wrap');
                 const newW = wrap ? wrap.clientWidth : 0;
-                if (newW > 20) c.resize({ width: newW, height: isModalChart ? 500 : 280 });
+                const newH = isModalChart ? 500 : (dom?.offsetHeight || 340);
+                if (newW > 20) c.resize({ width: newW, height: newH });
                 else c.resize();
             } catch(e) {}
         });
@@ -2743,21 +2573,6 @@ function bindRagEvents() {
     }
     if (newTop) newTop.addEventListener('click', startNewSession);
     if (delTop) delTop.addEventListener('click', deleteCurrentSession);
-    
-    // 旧版聊天事件（兼容）
-    if (chatSend) chatSend.addEventListener('click', sendMessage);
-    if (chatStop) chatStop.addEventListener('click', stopGeneration);
-    if (chatInput) {
-        chatInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                if (chatSend && !chatSend.disabled) sendMessage();
-            }
-        });
-    }
-    
-    const chatClear = document.getElementById('chat-clear');
-    if (chatClear) chatClear.addEventListener('click', clearConversation);
     
     // ---- Landing page Enter key sends query ----
     const landingQuery = document.getElementById('landing-query');
@@ -4788,19 +4603,6 @@ function hasPotentialMissingValueProcessingFromText(text) {
     return Array.from(counts.values()).some(count => count >= 8);
 }
 
-function hasPotentialMissingValueProcessingFromRows(rows, headers) {
-    if (!Array.isArray(rows) || rows.length < 8 || !Array.isArray(headers)) return false;
-    return headers.some(header => {
-        if (/年份|地区|省份|城市|名称|name|region|year/i.test(String(header))) return false;
-        const values = rows.map(row => row?.[header]).filter(v => typeof v === 'number' && Number.isFinite(v));
-        if (values.length < 8) return false;
-        const counts = new Map();
-        values.forEach(v => counts.set(String(v), (counts.get(String(v)) || 0) + 1));
-        const maxRepeat = Math.max(0, ...counts.values());
-        return maxRepeat >= 8 && maxRepeat / values.length >= 0.45;
-    });
-}
-
 // ── 查看大图辅助 ──────────────────────────────────────
 function _addViewFullBtn(chartDom, onClick) {
     const old = chartDom.parentElement?.querySelector('.view-full-btn');
@@ -4982,8 +4784,6 @@ function renderButterflyControls(container) {
         renderBFChips();
     });
 }
-
-function dataProcessingNoticeHtml() { return ''; }
 
 async function loadChart(type) {
     const chartDom = document.getElementById('analysis-chart');
@@ -5335,7 +5135,7 @@ function openAnalysisPanel(type) {
         bubble:    '气泡图 — 三维联合分析',
         butterfly: '蝴蝶图 — 双省指标对比'
     };
-    const titleEl = document.getElementById('panel-title');
+    const titleEl = document.getElementById('analysis-panel-title');
     if (titleEl) titleEl.innerText = titleMap[type] || type;
     
     // Animate open
@@ -5681,8 +5481,6 @@ function renderAgentChartInsideBubble(bubble, config) {
     const chartEl = wrap.querySelector('.agent-inline-chart');
     const chartId = 'agent_inline_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
     chartEl.id = chartId;
-    chartEl.style.height = '360px';
-    chartEl.style.width = '100%';
     requestAnimationFrame(() => _doRenderInlineChart(chartId, config, false));
     return chartId;
 }
@@ -5734,6 +5532,13 @@ document.addEventListener('click', function(e) {
     if (action === 'open-data-table') toggleInlineDataTable(bubble, data.chart);
 });
 
+/* ── AI 追问建议按钮 ─────────────────────────────────────── */
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('.rag-suggestion[data-question]');
+    if (!btn) return;
+    sendRagQuick(btn.dataset.question);
+});
+
 /* ── 内联数据明细表 ─────────────────────────────────────── */
 function buildTableRows(config) {
     if (!window.workbook || !config?.metric) return { headers: [], rows: [] };
@@ -5743,9 +5548,16 @@ function buildTableRows(config) {
     const years    = config.years   || [];
     const NATIONAL = ['全国', '全国平均', '全国总计', '全国合计'];
     const useNat   = !regions.length || regions.every(r => NATIONAL.includes(r));
+    // 判断是否为地级市数据：取第一个非全国地区，看它在哪张表里有记录
+    const cityRows     = window.workbook['地级市'] || [];
+    const provinceRows = window.workbook['省份']   || [];
+    const firstRegion  = regions.find(r => !NATIONAL.includes(r));
+    const useCity = !useNat && firstRegion &&
+        cityRows.some(r => r['地区'] === firstRegion) &&
+        !provinceRows.some(r => r['地区'] === firstRegion);
     const srcRows  = useNat
         ? (window.workbook['全国'] || [])
-        : (window.workbook['省份'] || []);
+        : (useCity ? cityRows : provinceRows);
 
     // 模糊匹配字段名
     const cleanT = metric.replace(/[（(].*?[）)]/g, '').trim();
@@ -5952,49 +5764,6 @@ function agentGenerateReport(data, question) {
     const docx = agentBuildDocx(data, question);
     agentDownloadBlob(`agent_report_${Date.now()}.docx`, docx);
     showToast?.('分析报告 DOCX 已生成并下载', 'success');
-}
-
-function openScatterChartModal() {
-    const option = window._lastScatterOption;
-    if (!option) {
-        showToast?.('请先生成散点图', 'warn');
-        return;
-    }
-    const old = document.getElementById('scatter-chart-modal');
-    if (old) old.remove();
-    const modal = document.createElement('div');
-    modal.id = 'scatter-chart-modal';
-    modal.className = 'scatter-chart-modal';
-    modal.innerHTML = `
-        <div class="scatter-modal-shell">
-            <div class="scatter-modal-head">
-                <span class="scatter-modal-hint">滚轮缩放 · 拖动平移 · 悬停查看名称与数值</span>
-                <strong>散点图交互查看</strong>
-                <button type="button" class="scatter-modal-close" aria-label="关闭">×</button>
-            </div>
-            <div id="scatter-modal-chart" class="scatter-modal-chart"></div>
-        </div>`;
-    document.body.appendChild(modal);
-    const modalHead = modal.querySelector('.scatter-modal-head');
-    const modalTitle = modalHead?.querySelector('strong');
-    const modalHint = modalHead?.querySelector('.scatter-modal-hint');
-    const modalClose = modalHead?.querySelector('.scatter-modal-close');
-    if (modalTitle) modalTitle.textContent = '散点图交互查看';
-    if (modalHint) modalHint.textContent = '滚轮缩放 · 拖动平移 · 悬停查看名称与数值';
-    if (modalClose) {
-        modalClose.textContent = '×';
-        modalClose.setAttribute('aria-label', '关闭');
-    }
-    const close = () => {
-        const chart = echarts.getInstanceByDom(document.getElementById('scatter-modal-chart'));
-        if (chart) chart.dispose();
-        modal.remove();
-    };
-    modal.querySelector('.scatter-modal-close').onclick = close;
-    modal.addEventListener('click', e => { if (e.target === modal) close(); });
-    const chart = initEChartSafe(document.getElementById('scatter-modal-chart'));
-    chart.setOption(option);
-    setTimeout(() => chart.resize(), 60);
 }
 
 function agentActionIcon(type) {

@@ -277,15 +277,54 @@ function safeParseJSON(raw) {
     try { return JSON.parse(str); } catch (e) { return null; }
 }
 
-async function generateSync(prompt, timeoutMs = OLLAMA_TIMEOUT_MS) {
+// ── 主流RAG做法：将追问压缩为独立完整问题（condense question）──
+// 参考 LangChain ConversationalRetrievalChain / LlamaIndex chat engine 的默认步骤
+async function condenseQuestion(question, history) {
+    if (!history || history.length === 0) return question;
+
+    // 快速判断：以下情况明显是独立问题，跳过LLM调用节省延迟
+    const isObviouslyStandalone =
+        question.length > 25 ||                                   // 够长，信息完整
+        /^\d{4}年/.test(question) ||                              // 以年份开头
+        /^(请|帮|告诉我|分析|比较|预测|列出)/.test(question) ||  // 明确指令性开头
+        !/[一-龥]/.test(question);                        // 纯英文/数字
+    if (isObviouslyStandalone) return question;
+
+    // 构建简短历史上下文（只取最近2轮，控制token）
+    const lastTurns = history.slice(-4)
+        .map(h => `${h.role === 'user' ? 'U' : 'A'}: ${String(h.content || '').replace(/（追问[\s\S]*?）/g, '').trim().slice(0, 100)}`)
+        .join('\n');
+
+    const prompt = `根据对话历史，把追问改写成独立完整的中文问题。若已完整则原样返回，禁止解释或换行。
+
+历史：
+${lastTurns}
+
+追问：${question}
+独立问题：`;
+
+    try {
+        const raw = await generateSync(prompt, 8000, 80);
+        const condensed = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim().split('\n')[0].slice(0, 150);
+        if (condensed && condensed.length >= 2) {
+            if (condensed !== question) console.log(`🔍 问题压缩: "${question}" → "${condensed}"`);
+            return condensed;
+        }
+    } catch (e) {
+        console.warn('[condenseQuestion] 失败，使用原问题:', e.message);
+    }
+    return question;
+}
+
+async function generateSync(prompt, timeoutMs = OLLAMA_TIMEOUT_MS, maxTokens = 2048) {
     if (USE_DEEPSEEK_API) {
-        return generateDeepSeek(prompt, timeoutMs);
+        return generateDeepSeek(prompt, timeoutMs, maxTokens);
     }
     return generateOllama(prompt, timeoutMs);
 }
 
 // DeepSeek 官方 API（有 Key 时使用）
-async function generateDeepSeek(prompt, timeoutMs = 30000) {
+async function generateDeepSeek(prompt, timeoutMs = 30000, maxTokens = 2048) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -299,7 +338,7 @@ async function generateDeepSeek(prompt, timeoutMs = 30000) {
             body: JSON.stringify({
                 model: DEEPSEEK_MODEL,
                 messages: [{ role: 'user', content: prompt }],
-                max_tokens: 2048,
+                max_tokens: maxTokens,
                 temperature: 0.18,
                 stream: false
             })
@@ -2065,7 +2104,7 @@ async function answerEvidenceChat(question, entities, recentHistory = []) {
         })
         .join('\n');
     const sourceHintLine = chromaSourceHint
-        ? `\n可引用来源（回答末尾用"📄 来源：《文件名》第N页"格式标注，最多3个）：\n${chromaSourceHint}`
+        ? `\n可引用来源（回答末尾用"来源：《文件名》第N页"格式标注，最多3个）：\n${chromaSourceHint}`
         : '';
 
     if (evidence.length || chromaEvidence.length) {
@@ -2079,7 +2118,7 @@ async function answerEvidenceChat(question, entities, recentHistory = []) {
 5. 不要输出<think>，不要提及"检索"、"向量库"、"RAG"等技术术语。
 6. 中文回答，结构清晰，适度简洁。
 7. 列举多个要点时，使用"一、二、三"或"①②③"等中文序号，不要使用"1. 2. 3."的 Markdown 有序列表格式（前端不渲染 Markdown）。
-8. 如果回答引用了补充证据中的报告内容，在回答末尾单独一行标注来源，格式：📄 来源：《报告名》第N页（URL）。最多标注3个。
+8. 如果回答引用了补充证据中的报告内容，在回答末尾单独一行标注来源，格式：来源：《报告名》第N页（URL）。最多标注3个。
 9. 补充证据中以"[图表内容]"开头的段落是从图片中识别出的图表描述，直接提取其中的数据和结论作为依据，不要把"[图表内容]"这几个字输出给用户。
 
 最近对话：
@@ -2389,7 +2428,7 @@ async function synthesizeConversationalAnswer(question, draftAnswer, context = {
         })
         .filter(s => s.filename);
     const sourceHint = sourceIndex.length
-        ? `\n可引用来源（在回答末尾用"📄 来源：《文件名》第N页"格式标注，如有URL可附链接）：\n` +
+        ? `\n可引用来源（在回答末尾用"来源：《文件名》第N页"格式标注，如有URL可附链接）：\n` +
           sourceIndex.map((s, i) => `  [${i + 1}] 《${s.filename.replace(/\.pdf$/i, '')}》${s.page ? '第' + s.page + '页' : ''}${s.section ? ' §' + s.section : ''} ${s.url ? '(' + s.url + ')' : ''}`).join('\n')
         : '';
     const reportSection = reportSnippets
@@ -3960,28 +3999,9 @@ async function runAgent(question, recentHistory = []) {
         return answerGeneralChat(q, recentHistory);
     }
 
-    // ── 短问题上下文扩展：极短追问（如"以色列呢"）用 history 推断主题 ──
-    if (q.length <= 14 && GLOBAL_COUNTRIES_RE.test(q) && recentHistory.length > 0) {
-        const lastUserMsg = recentHistory.slice().reverse().find(h => h.role === 'user');
-        if (lastUserMsg) {
-            const lastQ = String(lastUserMsg.content || '')
-                .replace(/（追问上下文：[\s\S]*?）\n?/, '')
-                .replace(/（追问关于[\s\S]*?）\n?/, '')
-                .trim();
-            // 从上一问题提取主题词（去掉国家名和语气词）
-            const topicPart = lastQ
-                .replace(GLOBAL_COUNTRIES_RE, '')
-                .replace(/^[的了吗呢啊是否？?。，,！!\s]+|[的了吗呢啊是否？?。，,！!\s]+$/g, '')
-                .trim()
-                .slice(0, 24);
-            if (topicPart.length >= 3) {
-                const countryMatch = q.match(GLOBAL_COUNTRIES_RE);
-                const country = countryMatch ? countryMatch[0] : '';
-                const expanded = country ? `${country}的${topicPart}` : q;
-                console.log(`🔍 短问题上下文扩展: "${q}" → "${expanded}"`);
-                q = expanded;
-            }
-        }
+    // ── 上下文问题压缩（主流RAG做法，替代原硬编码扩展逻辑）──
+    if (recentHistory.length > 0) {
+        q = await condenseQuestion(q, recentHistory);
     }
 
     // ── 早期拦截：全球话题 / 报告查询 → 直接走 evidence_chat ──

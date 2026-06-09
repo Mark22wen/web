@@ -363,7 +363,7 @@
             </div>
             <div id="analysis-panel" style="display:none;">
                 <div class="analysis-panel-header">
-                    <span id="panel-title">图表分析</span>
+                    <span id="analysis-panel-title">图表分析</span>
                     <div class="analysis-panel-actions">
                         <span class="export-label">导出</span>
                         <button id="export-chart-png" class="mini-btn">PNG</button>
@@ -553,17 +553,17 @@
                     <div class="report-title">全球国势指数分析报告</div>
                     <div class="report-meta">PDF · 点击阅读</div>
                 </a>
-                <a class="report-card" href="/资料/15.中国科技人力资源发展研究报告.pdf" target="_blank" rel="noopener">
+                <a class="report-card" href="/资料/中国科技人力资源发展研究报告2022.pdf" target="_blank" rel="noopener">
                     <div class="report-year">研究报告</div>
                     <div class="report-title">中国科技人力资源发展研究报告</div>
                     <div class="report-meta">PDF · 点击阅读</div>
                 </a>
-                <a class="report-card" href="/资料/16.中国人力资本指数报告（中央财经大学）.pdf" target="_blank" rel="noopener">
+                <a class="report-card" href="/资料/中国人力资本指数报告（2025中央财经大学）.pdf" target="_blank" rel="noopener">
                     <div class="report-year">研究报告</div>
                     <div class="report-title">中国人力资本指数报告</div>
                     <div class="report-meta">中央财经大学 · PDF · 点击阅读</div>
                 </a>
-                <a class="report-card" href="/资料/14.数智时代中国图书馆影响力指数报告（武汉大学）.pdf" target="_blank" rel="noopener">
+                <a class="report-card" href="/资料/数智时代中国图书馆影响力指数报告（2025武汉大学）.pdf" target="_blank" rel="noopener">
                     <div class="report-year">研究报告</div>
                     <div class="report-title">数智时代中国图书馆影响力指数报告</div>
                     <div class="report-meta">武汉大学 · PDF · 点击阅读</div>
@@ -607,10 +607,10 @@
 
         <div class="sidebar-section">
             <div class="sidebar-section-title">快捷提问</div>
-            <button class="quick-q" id="sq-trend" onclick="">近10年工业机器人密度趋势</button>
-            <button class="quick-q" id="sq-forecast" onclick="">预测高校数量</button>
+            <button class="quick-q" id="sq-trend" onclick="sendRagQuick('近10年工业机器人密度趋势')">近10年工业机器人密度趋势</button>
+            <button class="quick-q" id="sq-forecast" onclick="sendRagQuick('预测普通高校数量')">预测高校数量</button>
             <button class="quick-q" id="sq-report" onclick="sendRagQuick('根据全球智数化人才指数报告，中国的智数化人才排名情况')">报告：中国人才排名</button>
-            <button class="quick-q" id="sq-city" onclick="">济南市科技指标</button>
+            <button class="quick-q" id="sq-city" onclick="sendRagQuick('济南市科技指标')">济南市科技指标</button>
         </div>
 
         <div class="sidebar-footer">
@@ -648,10 +648,10 @@
                 <h2>我是你的数据分析助手</h2>
                 <p>查询数据 · 分析趋势 · 对比地区 · 预测未来<br>所有回答均基于平台数据，附带来源溯源。</p>
                 <div class="rag-welcome-hints">
-                    <button class="rag-hint-btn" id="hint-ranking" onclick="">各省杰青数量排名</button>
-                    <button class="rag-hint-btn" id="hint-trend" onclick="">近5年长江学者趋势</button>
-                    <button class="rag-hint-btn" id="hint-forecast" onclick="">预测普通高校数量</button>
-                    <button class="rag-hint-btn" id="hint-compare" onclick="">江苏vs浙江R&D投入对比</button>
+                    <button class="rag-hint-btn" id="hint-ranking" onclick="sendRagQuick('各省杰青数量排名')">各省杰青数量排名</button>
+                    <button class="rag-hint-btn" id="hint-trend" onclick="sendRagQuick('近5年长江学者趋势')">近5年长江学者趋势</button>
+                    <button class="rag-hint-btn" id="hint-forecast" onclick="sendRagQuick('预测普通高校数量')">预测普通高校数量</button>
+                    <button class="rag-hint-btn" id="hint-compare" onclick="sendRagQuick('江苏vs浙江R&D投入对比')">江苏vs浙江R&D投入对比</button>
                 </div>
             </div>
         </div>

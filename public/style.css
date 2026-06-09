@@ -4242,61 +4242,6 @@ body.dark-mode .hero-input:-webkit-autofill:focus {
   min-height:var(--scatter-chart-h,440px) !important;
   margin:12px auto 0 !important;
 }
-.scatter-chart-modal{
-  position:fixed;
-  inset:0;
-  z-index:12000;
-  background:rgba(9,18,32,.52);
-  backdrop-filter:blur(12px);
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding:28px;
-}
-.scatter-modal-shell{
-  width:min(1280px,96vw);
-  height:min(780px,88vh);
-  border-radius:18px;
-  background:rgba(248,252,255,.98);
-  border:1px solid rgba(150,177,210,.45);
-  box-shadow:0 28px 80px rgba(15,35,65,.28);
-  display:flex;
-  flex-direction:column;
-  overflow:hidden;
-}
-.scatter-modal-head{
-  height:58px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  padding:0 20px;
-  border-bottom:1px solid rgba(170,190,214,.32);
-  color:#17345c;
-}
-.scatter-modal-close{
-  width:36px;
-  height:36px;
-  border-radius:10px;
-  border:1px solid rgba(150,177,210,.45);
-  background:#fff;
-  color:#245887;
-  font-size:22px;
-  cursor:pointer;
-}
-.scatter-modal-chart{flex:1;min-height:0;}
-body.dark-mode .scatter-modal-shell{
-  background:rgba(17,27,45,.98);
-  border-color:rgba(95,121,164,.45);
-}
-body.dark-mode .scatter-modal-head{
-  color:#e9f2ff;
-  border-bottom-color:rgba(95,121,164,.35);
-}
-body.dark-mode .scatter-modal-close{
-  background:#17233a;
-  color:#e9f2ff;
-  border-color:rgba(95,121,164,.45);
-}
 @media(max-width:900px){
   body.sdufe-cover-active .sdufe-cover-content{top:clamp(210px,34vh,300px) !important;}
   body.sdufe-cover-active .cover-seal-logo{width:70% !important;height:70% !important;}
@@ -4615,18 +4560,6 @@ body.sdufe-cover-active .sdufe-cover.calibrated .sdufe-slide-enter{
 }
 body.dark-mode .scatter-interaction-hint{
   color:rgba(199,213,232,.62);
-}
-.scatter-modal-head{
-  gap:14px;
-}
-.scatter-modal-hint{
-  flex:1;
-  color:rgba(94,116,145,.78);
-  font-size:.78rem;
-  font-weight:500;
-}
-body.dark-mode .scatter-modal-hint{
-  color:rgba(203,213,225,.68);
 }
 body.sdufe-cover-active .sdufe-cover{
   background:
