@@ -940,6 +940,14 @@ body.dark-mode .close-btn:hover{background:rgba(96,165,250,.14);border-color:rgb
 .session-icon{width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center;}
 .session-icon svg{stroke:var(--c-muted);width:13px;height:13px;}
 .session-item.active .session-icon svg{stroke:var(--c-accent);}
+/* ── 对话加载中动画 ────────────────────────────────────── */
+.session-item.loading{position:relative;overflow:hidden;}
+.session-item.loading .session-icon svg{display:none;}
+.session-item.loading .session-icon::after{content:'';display:block;width:13px;height:13px;border:2px solid var(--c-accent);border-top-color:transparent;border-radius:50%;animation:session-spin .7s linear infinite;}
+.session-item.loading .session-title{color:var(--c-accent);}
+.session-item.loading::after{content:'';position:absolute;right:0;top:0;bottom:0;width:3px;background:var(--c-accent);border-radius:0 9px 9px 0;animation:session-pulse 1.2s ease-in-out infinite;}
+@keyframes session-spin{to{transform:rotate(360deg);}}
+@keyframes session-pulse{0%,100%{opacity:.35;}50%{opacity:1;}}
 .session-title{flex:1;font-size:.82rem;font-weight:500;color:var(--c-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .session-meta{font-size:.69rem;color:var(--c-muted);white-space:nowrap;}
 .session-delete{width:20px;height:20px;border-radius:50%;background:none;border:none;color:var(--c-muted);font-size:1rem;opacity:0;transition:var(--t);flex-shrink:0;line-height:1;display:flex;align-items:center;justify-content:center;}

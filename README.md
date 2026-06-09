@@ -10,17 +10,19 @@
 1. [项目简介](#1-项目简介)
 2. [技术栈总览](#2-技术栈总览)
 3. [目录结构](#3-目录结构)
-4. [依赖安装](#4-依赖安装)
-5. [环境变量配置](#5-环境变量配置)
-6. [ChromaDB 向量库安装与启动](#6-chromadb-向量库安装与启动)
-7. [数据文件说明](#7-数据文件说明)
-8. [启动方式](#8-启动方式)
-9. [网站逐步构建思路](#9-网站逐步构建思路)
-10. [RAG 实现流程](#10-rag-实现流程)
-11. [Agent 决策流程](#11-agent-决策流程)
-12. [前端图表渲染流程](#12-前端图表渲染流程)
-13. [SSE 流式推送流程](#13-sse-流式推送流程)
-14. [常见问题](#14-常见问题)
+4. [文件使用顺序](#4-文件使用顺序)
+5. [依赖安装](#5-依赖安装)
+6. [环境变量配置](#6-环境变量配置)
+7. [ChromaDB 向量库安装与启动](#7-chromadb-向量库安装与启动)
+8. [数据文件说明](#8-数据文件说明)
+9. [启动方式](#9-启动方式)
+10. [网站逐步构建思路](#10-网站逐步构建思路)
+11. [RAG 实现流程](#11-rag-实现流程)
+12. [Agent 决策流程](#12-agent-决策流程)
+13. [前端图表渲染流程](#13-前端图表渲染流程)
+14. [SSE 流式推送流程](#14-sse-流式推送流程)
+15. [提交包与老师本地运行](#15-提交包与老师本地运行)
+16. [常见问题](#16-常见问题)
 
 ---
 
@@ -56,12 +58,13 @@
 rag-backend/
 ├── server.js              # 后端主文件（全部逻辑）
 ├── data.json              # 结构化数据缓存（全国/省份/地级市三张表）
+├── chroma_db/             # 已构建的 ChromaDB 向量库（提交包可附带）
 ├── package.json           # Node.js 依赖声明
-├── .env                   # 环境变量（不提交 Git）
+├── .env                   # 环境变量（本地演示用，包含 API Key 时请勿公开传播）
 ├── public/
 │   ├── index.html         # 单页应用入口（SVG 图标、页面骨架、内联 JS）
-│   ├── script.js          # 前端全部逻辑（~5900 行）
-│   ├── style.css          # 全部样式（~5400 行）
+│   ├── script.js          # 前端全部逻辑
+│   ├── style.css          # 全部样式
 │   └── images/            # 静态图片（Logo 等）
 │   └── 资料/              # PDF 报告白皮书（直接通过 /资料/xxx.pdf 访问）
 │       └── PDF名单/       # 历年人才名单 PDF
@@ -69,13 +72,145 @@ rag-backend/
 ```
 
 **说明：**
-- `data.json` 由外部 ETL 脚本生成，格式见第 7 节。平台启动时一次性加载进内存。
+- `data.json` 由外部 ETL 脚本生成，格式见第 8 节。平台启动时一次性加载进内存。
 - `public/资料/` 下的 PDF 通过 Express 静态文件服务直接暴露，无需额外路由。
 - `sharp` 包虽在 node_modules 中但未被代码引用，可忽略或删除。
 
 ---
 
-## 4. 依赖安装
+## 4. 文件使用顺序
+
+本节说明各脚本和配置文件的用途及执行顺序，分**首次部署**和**日常维护**两种场景。
+
+### 脚本文件一览
+
+| 文件 | 语言 | 作用 |
+|------|------|------|
+| `public/convert_to_json.py` | Python | 将 Excel 原始数据表转换为 `data.json`，是平台数据的唯一来源 |
+| `knowledge_ingest.py` | Python | 将 `public/资料/` 下的 PDF、Word、Excel 文档向量化后写入 ChromaDB |
+| `url_ingest.py` | Python | 爬取指定网页/微信文章写入 ChromaDB（可选，补充网络内容） |
+| `check_chroma.py` | Python | 诊断工具：检查 ChromaDB 连接状态和已存储文档数量 |
+| `server.js` | Node.js | 后端主服务，包含全部 API、检索、Agent 逻辑 |
+| `public/index.html` | HTML | 前端单页入口，直接由浏览器加载 |
+| `public/script.js` | JS | 前端全部交互逻辑 |
+| `public/style.css` | CSS | 全部样式 |
+
+---
+
+### 首次部署流程
+
+**第 1 步：准备结构化数据（Excel → data.json）**
+
+将原始数据 Excel（含`全国`、`省份`、`地级市`三张工作表）放入 `public/` 目录，然后运行：
+
+```bash
+cd public
+python convert_to_json.py
+```
+
+生成 `data.json`（约几 MB），放于项目根目录。这是平台图表和 AI 数据分析的数据来源，**只需生成一次**，数据更新时重新运行。
+
+---
+
+**第 2 步：安装 Node.js 依赖**
+
+```bash
+cd rag-backend
+npm install
+```
+
+---
+
+**第 3 步：配置 `.env`**
+
+复制或新建 `.env`，填写 `DEEPSEEK_API_KEY`（或留空使用本地 Ollama）。详见第 6 节。
+
+---
+
+**第 4 步：启动 ChromaDB（可跳过）**
+
+若需要语义检索（报告/白皮书问答），先启动 ChromaDB：
+
+```bash
+pip install chromadb
+chroma run --path ./chroma_db
+```
+
+若跳过此步，在 `.env` 中设置 `DISABLE_CHROMA=true`，系统自动降级为本地关键词检索，其他功能不受影响。
+
+---
+
+**第 5 步：知识文档入库**
+
+将 PDF / Word / Excel 报告放入 `public/资料/`，然后运行：
+
+```bash
+# 安装 Python 依赖（首次）
+pip install pymupdf4llm pdfplumber pymupdf python-docx openpyxl requests
+
+# 增量入库（已有的 chunk 自动跳过，可多次运行）
+python knowledge_ingest.py
+
+# 可选：爬取网页内容入库
+pip install beautifulsoup4
+python url_ingest.py
+```
+
+入库完成后可用诊断工具验证：
+
+```bash
+python check_chroma.py
+# 输出示例：✅ ChromaDB 连接正常，总量: 2840 条
+```
+
+---
+
+**第 6 步：启动服务**
+
+```bash
+node server.js
+# 或
+npm start
+```
+
+访问 `http://localhost:3001`，平台即可使用。
+
+---
+
+### 日常维护
+
+| 场景 | 操作 |
+|------|------|
+| **更新统计数据**（新一年 Excel） | 替换 Excel → 重跑 `python public/convert_to_json.py` → 重启 `server.js` |
+| **新增报告 PDF** | 把 PDF 放入 `public/资料/` → 运行 `python knowledge_ingest.py` |
+| **重建特定文档**（内容改动） | `python knowledge_ingest.py --file 报告名.pdf --force` |
+| **全量重建知识库**（换嵌入模型） | `python knowledge_ingest.py --drop-collection` → `python knowledge_ingest.py --force` |
+| **补写 metadata**（不重新嵌入） | `python knowledge_ingest.py --update-meta` |
+| **检查向量库状态** | `python check_chroma.py` |
+
+---
+
+### 数据流向总览
+
+```
+基础数据汇总.xlsx
+        │
+        ▼
+convert_to_json.py  ──→  data.json  ──→  server.js（启动时加载）
+                                                │
+public/资料/*.pdf                              ▼
+public/资料/*.docx   ──→  knowledge_ingest.py  ──→  ChromaDB（知识向量库）
+public/资料/*.xlsx                                       │
+url_ingest.py（网页）──────────────────────────────────┘
+                                                         │
+                                              server.js 检索 + LLM
+                                                         │
+                                              浏览器 ← index.html / script.js
+```
+
+---
+
+## 5. 依赖安装
 
 ### 前提条件
 
@@ -107,7 +242,7 @@ npm install
 
 ---
 
-## 5. 环境变量配置
+## 6. 环境变量配置
 
 在项目根目录创建 `.env` 文件：
 
@@ -126,6 +261,7 @@ OLLAMA_TIMEOUT_MS=120000
 # ── 服务配置 ──────────────────────────────────────────────
 PORT=3001
 ALLOWED_ORIGINS=                      # 额外允许的跨域来源，逗号分隔
+ENABLE_DEBUG_ROUTES=false             # true 时开启 /api/debug/chroma 诊断接口
 
 # ── 会话管理 ──────────────────────────────────────────────
 MAX_HISTORY=12                        # 每个会话保留的最大对话轮数
@@ -143,7 +279,7 @@ SERPER_API_KEY=
 
 ---
 
-## 6. ChromaDB 向量库安装与启动
+## 7. ChromaDB 向量库安装与启动
 
 ChromaDB 是一个独立的 Python 进程，提供向量存储和语义检索服务。平台不强依赖它——若连接失败会自动降级为本地混合检索（FlexSearch）。
 
@@ -162,13 +298,13 @@ chroma run --path ./chroma_db
 
 ### 向量库初始化（首次使用）
 
-将 PDF/文本知识文档写入 ChromaDB 需要额外的导入脚本（不在本仓库中）。写入后 server.js 在启动时自动连接并建立 BM25 索引。
+将 PDF/Word/Excel 知识文档写入 ChromaDB 使用本仓库的 `knowledge_ingest.py`。写入后 server.js 在启动时自动连接并建立 BM25 索引。
 
 若 `patent_knowledge` Collection 为空，平台会使用本地混合索引兜底，正常功能不受影响。
 
 ---
 
-## 7. 数据文件说明
+## 8. 数据文件说明
 
 ### data.json 格式
 
@@ -195,7 +331,30 @@ chroma run --path ./chroma_db
 
 ---
 
-## 8. 启动方式
+### 知识文档入库说明
+
+#### 已处理的资料
+
+| 资料类型 | 存放位置 | 处理方式 |
+|----------|----------|----------|
+| PDF 报告、白皮书（政策文件、行业报告） | `public/资料/*.pdf` | `knowledge_ingest.py` 用 pymupdf4llm / pdfplumber 提取正文，按 600 字切块（重叠 100 字），bge-m3 向量化后存入 ChromaDB |
+| Word 文档（.docx） | `public/资料/*.docx` | 同上（python-docx 提取段落） |
+| 名单类 Excel（`.xlsx`） | `public/资料/PDF名单/` | 由 `knowledge_ingest.py` 以"整行描述"格式读取，作为知识文档入库 |
+| 网页文章（可选） | 无本地文件 | `url_ingest.py` 爬取后写入 ChromaDB，与本地文档共用同一集合 |
+
+> 具体入库了哪些文件、共多少条 chunk，可运行 `python check_chroma.py` 查看（示例输出：`✅ ChromaDB 连接正常，总量: 2840 条`）。
+
+#### 未处理的资料
+
+| 内容 | 原因 |
+|------|------|
+| 原始 Excel 统计数据（`基础数据汇总.xlsx`） | 走独立的 ETL 流程 `convert_to_json.py → data.json`，不入向量库，由 server.js 直接查询 |
+| PDF 中的图片、表格图（非文字部分） | 默认跳过；若本地有 LLaVA 视觉模型，运行 `python knowledge_ingest.py`（不带 `--no-vision`）可自动识别图表内容 |
+| 未放入 `public/资料/` 的文件 | `knowledge_ingest.py` 只扫描该目录，其他位置不会被入库 |
+
+---
+
+## 9. 启动方式
 
 ```bash
 # 同时启动 ChromaDB（若需要语义检索）
@@ -205,6 +364,9 @@ chroma run --path ./chroma_db &
 node server.js
 # 或使用 npm
 npm start
+
+# 可选：运行基础语法检查
+npm test
 ```
 
 访问 `http://localhost:3001`
@@ -213,7 +375,7 @@ npm start
 ```
 🚀 服务启动 → http://localhost:3001
 🤖 推理引擎: DeepSeek API (deepseek-chat)
-📊 共加载 32 个指标：普通高校数量、工业机器人密度...
+📊 共加载 71 个指标：科学支出水平、工业机器人密度...
 ✅ 本地混合知识索引构建完成 (18420条)
 ✅ ChromaDB 知识库已连接: patent_knowledge / 2840 条
 ✅ BM25 索引构建完成 (2840 条知识文档)
@@ -222,7 +384,7 @@ npm start
 
 ---
 
-## 9. 网站逐步构建思路
+## 10. 网站逐步构建思路
 
 ### 第一阶段：数据看板（纯前端）
 
@@ -266,7 +428,7 @@ npm start
 
 ---
 
-## 10. RAG 实现流程
+## 11. RAG / Corrective RAG 实现流程
 
 ### 检索策略：混合检索（Hybrid Retrieval）
 
@@ -285,14 +447,41 @@ npm start
 三路结果 → RRF 重排序（Reciprocal Rank Fusion）→ 取 Top-K
 ```
 
+### 纠正式 RAG 流程（Corrective RAG）
+
+平台在普通混合检索外增加了证据质量评估和自动纠正步骤，避免低相关证据直接进入生成阶段：
+
+```
+用户问题
+    │
+    ├─ 第一轮混合检索：本地结构化索引 + BM25 + ChromaDB + HyDE
+    │
+    ├─ 证据质量评估
+    │     ├─ 规则评估：指标/地区/年份命中、召回数量、向量距离
+    │     └─ LLM 评估：correct / ambiguous / incorrect
+    │
+    ├─ 若证据不足：
+    │     ├─ rewriteQueryForCorrectiveRag() 改写查询
+    │     ├─ 第二轮重新检索
+    │     └─ 必要时 webSearchFallback() 网络搜索兜底
+    │
+    ├─ refineKnowledge() 提取与问题直接相关的证据片段
+    │
+    └─ 证据约束生成：只基于召回证据组织回答并返回 citations
+```
+
 ### 知识问答流程（answerEvidenceChat）
 
 ```
 问题 + 检索到的证据片段
     │
-    ├─ 第一次检索：ChromaDB 5条 + BM25 5条
+    ├─ 第一次检索：ChromaDB + BM25 + 本地混合索引
     │
-    ├─ 重写查询（HyDE）→ 第二次检索扩充
+    ├─ 检索质量评估 → 必要时改写查询并第二次检索
+    │
+    ├─ 若仍不足 → 可选网络搜索兜底
+    │
+    ├─ 知识精炼 → 提取关键片段
     │
     ├─ 实体继承（上下文追问时补全 region/metric）
     │
@@ -317,7 +506,7 @@ else：
 
 ---
 
-## 11. Agent 决策流程
+## 12. Agent 决策流程
 
 用户每次提问经过以下流水线：
 
@@ -387,7 +576,7 @@ else：
 
 ---
 
-## 12. 前端图表渲染流程
+## 13. 前端图表渲染流程
 
 ### 内联图表（AI 气泡内）
 
@@ -416,7 +605,7 @@ else：
 
 ---
 
-## 13. SSE 流式推送流程
+## 14. SSE 流式推送流程
 
 ```
 POST /api/agent/stream
@@ -446,7 +635,97 @@ POST /api/agent/stream
 
 ---
 
-## 14. 常见问题
+## 15. 提交包与老师本地运行
+
+### 提交包内容
+
+为方便老师直接本地体验，最终压缩包可包含已经构建好的 ChromaDB 向量库和演示用 `.env`：
+
+```text
+rag-backend-final/
+├── server.js
+├── package.json
+├── package-lock.json
+├── README.md
+├── data.json
+├── .env
+├── public/
+├── chroma_db/
+├── knowledge_ingest.py
+├── url_ingest.py
+├── check_chroma.py
+└── .gitignore
+```
+
+不建议放入以下内容：
+
+```text
+node_modules/
+.git/
+server.log
+h.year)
+set
+public/资料/.DS_Store
+```
+
+说明：
+- `node_modules/` 不需要提交，老师运行 `npm install` 后会自动生成。
+- `.env` 为本地演示配置文件，若其中包含 `DEEPSEEK_API_KEY`，仅用于课程验收体验，不应上传到公开仓库或公开网盘。
+- `chroma_db/` 为已构建向量库，配合 ChromaDB 服务启动后可直接用于报告/白皮书 RAG 问答。
+
+### 老师本地运行步骤
+
+**第 1 步：安装 Node.js 依赖**
+
+```bash
+npm install
+```
+
+**第 2 步：启动 ChromaDB 向量库**
+
+另开一个终端，在项目根目录运行：
+
+```bash
+chroma run --path ./chroma_db
+```
+
+如果只体验数据看板和普通 AI 数据分析，不使用报告/白皮书语义检索，也可以在 `.env` 中设置：
+
+```env
+DISABLE_CHROMA=true
+```
+
+**第 3 步：启动网站后端**
+
+再开一个终端，在项目根目录运行：
+
+```bash
+npm start
+```
+
+看到控制台输出：
+
+```text
+✅ 就绪，等待提问...
+```
+
+即可在浏览器访问：
+
+```text
+http://localhost:3001
+```
+
+**第 4 步：可选检查**
+
+```bash
+npm test
+```
+
+该命令会检查 `server.js` 和 `public/script.js` 的 JavaScript 语法是否正常。
+
+---
+
+## 16. 常见问题
 
 ### Q: 启动后 AI 无回答，控制台报 "DeepSeek API 超时"
 

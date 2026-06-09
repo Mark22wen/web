@@ -28,6 +28,7 @@ const MAX_HISTORY = Math.max(1, parseInt(process.env.MAX_HISTORY || '12', 10));
 const SESSION_TTL_MS = Math.max(1, parseInt(process.env.SESSION_TTL_MINUTES || '30', 10)) * 60 * 1000;
 const MAX_SESSIONS = Math.max(10, parseInt(process.env.MAX_SESSIONS || '500', 10));
 const DISABLE_HISTORY = process.env.DISABLE_HISTORY === 'true';
+const ENABLE_DEBUG_ROUTES = process.env.ENABLE_DEBUG_ROUTES === 'true';
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || process.env.MODEL_NAME || 'deepseek-r1:7b';
 const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'bge-m3';
@@ -69,6 +70,9 @@ app.get('/', (req, res) => {
 
 // ========== 诊断接口 ==========
 app.get('/api/debug/chroma', async (req, res) => {
+    if (!ENABLE_DEBUG_ROUTES) {
+        return res.status(404).json({ error: 'Not found' });
+    }
     try {
         if (!collection) return res.json({ error: 'collection 未初始化' });
         const total = await collection.count();
@@ -2032,8 +2036,34 @@ async function answerEvidenceChat(question, entities, recentHistory = []) {
             } catch (_) { /* BM25 失败静默跳过 */ }
         }
 
+        // ── CRAG 评分：报告路径同样做质量评估 + 改写 + 网络兜底 ──
+        const reportGrade = await gradeRetrievedEvidenceWithLLM(question, entities, [], chroma);
+        let reportCorrected = false;
+        let reportRewriteReason = '';
+        let reportWebUsed = false;
+
+        if (!reportGrade.passed) {
+            // 第二轮：改写查询重新检索
+            const rewrite = await rewriteQueryForCorrectiveRag(question, entities, reportGrade);
+            reportRewriteReason = rewrite.reason;
+            const secondChroma = await retrieveChromaEvidence(rewrite.query, entities, isEnumerationQ ? 15 : 10, hydeText).catch(() => []);
+            const seen = new Set(chroma.map(c => (c.text || '').slice(0, 80)));
+            chroma = [...chroma, ...secondChroma.filter(c => !seen.has((c.text || '').slice(0, 80)))];
+            reportCorrected = true;
+
+            // 第三轮：仍不足则网络搜索兜底
+            const secondGrade = await gradeRetrievedEvidenceWithLLM(question, entities, [], chroma);
+            if (!secondGrade.passed) {
+                const webEvidence = await webSearchFallback(question, entities);
+                if (webEvidence.length) {
+                    chroma = [...chroma, ...webEvidence];
+                    reportWebUsed = true;
+                }
+            }
+        }
+
         const refined = await refineKnowledge(question, applyMMR(chroma, 0.7, 8));
-        corrective = { evidence: [], chromaEvidence: refined, grade: { passed: chroma.length > 0 }, corrected: false, query: question, originalGrade: {}, rewriteReason: '', webSearchUsed: false };
+        corrective = { evidence: [], chromaEvidence: refined, grade: reportGrade, corrected: reportCorrected, query: question, originalGrade: reportGrade, rewriteReason: reportRewriteReason, webSearchUsed: reportWebUsed };
         evidence = [];
         chromaEvidence = refined;
     } else {

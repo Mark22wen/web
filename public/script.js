@@ -648,6 +648,14 @@ function sendRagQuick(question) {
 let isRagStreaming = false;
 let ragController = null;
 const ragQueue = [];   // 追问队列
+const _loadingSessions = new Set(); // 正在加载回答的会话 ID
+
+function _setSessionLoading(sessionId, on) {
+    if (!sessionId) return;
+    if (on) _loadingSessions.add(sessionId); else _loadingSessions.delete(sessionId);
+    const el = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
+    if (el) el.classList.toggle('loading', on);
+}
 
 function stopRagGeneration() {
     if (ragController) {
@@ -707,6 +715,7 @@ async function _sendRagQueued(question) {
             </div>
         </div>`;
     isRagStreaming = true;
+    _setSessionLoading(currentSessionId, true);
     const liveSteps = [...assistantBubble.querySelectorAll('.rag-live-steps span')];
     let liveStepIndex = 0;
     const liveProgressTimer = setInterval(() => {
@@ -793,6 +802,7 @@ async function _sendRagQueued(question) {
     } finally {
         clearInterval(liveProgressTimer);
         isRagStreaming = false;
+        _setSessionLoading(currentSessionId, false);
         ragController = null;
         if (sendBtn) { sendBtn.disabled = false; sendBtn.style.display = 'flex'; }
         if (stopBtn) stopBtn.style.display = 'none';
@@ -956,7 +966,9 @@ function switchSession(id) {
     if (!container) return;
     container.innerHTML = '';
     
-    if (!session.messages.length) {
+    const isThisSessionLoading = _loadingSessions.has(id);
+
+    if (!session.messages.length && !isThisSessionLoading) {
         container.innerHTML = `<div class="rag-welcome">
             <div class="rag-welcome-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="32" height="32"><use href="#ico-brain"/></svg></div>
             <h2>科研教育人才一体化平台智能助手</h2>
@@ -983,7 +995,20 @@ function switchSession(id) {
         });
         container.scrollTop = container.scrollHeight;
     }
-    
+
+    // 若该会话正在加载回复，补显"正在回答"占位气泡
+    if (isThisSessionLoading) {
+        const ph = document.createElement('div');
+        ph.className = 'rag-message assistant';
+        ph.innerHTML = '<div class="rag-avatar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-brain"/></svg></div>'
+            + '<div class="rag-bubble streaming-cursor"><div class="rag-live-process">'
+            + '<div class="rag-live-title">正在思考与检索...</div>'
+            + '<div class="rag-live-steps"><span class="active">识别问题</span><span>查找数据</span><span>调用工具</span><span>组织回复</span></div>'
+            + '</div></div>';
+        container.appendChild(ph);
+        container.scrollTop = container.scrollHeight;
+    }
+
     renderSessionList();
 }
 
@@ -1010,9 +1035,10 @@ function renderSessionList() {
     const renameHint = '<div class="session-rename-tip">提示：双击对话名称可重命名</div>';
     list.innerHTML = renameHint + sessions.map(s => {
         const isActive = s.id === currentSessionId;
+        const isLoading = _loadingSessions.has(s.id);
         const msgCount = s.messages.filter(m => m.role === 'user').length;
         const shortTitle = s.title.length > 22 ? s.title.slice(0,20) + '…' : s.title;
-        return '<div class="session-item' + (isActive ? ' active' : '') + '" data-session-id="' + s.id + '" title="单击切换，双击重命名">'
+        return '<div class="session-item' + (isActive ? ' active' : '') + (isLoading ? ' loading' : '') + '" data-session-id="' + s.id + '" title="单击切换，双击重命名">'
             + '<div class="session-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-msg"/></svg></div>'
             + '<div class="session-title">' + escapeHtml(shortTitle) + '</div>'
             + '<div class="session-meta">' + msgCount + ' 条</div>'
@@ -1104,6 +1130,9 @@ async function sendRagMessage() {
     let question = input?.value.trim();
     if (!question) return;
 
+    // 锁定本次请求的 sessionId，防止用户切换会话后消息存错地方
+    const thisSessionId = currentSessionId;
+
     // 追问：把锚定的 Q+A 作为独立字段传给 server，不污染 question 文本
     const followupContext = window._ragFollowupContext || null;
     if (followupContext) clearFollowupContext();
@@ -1117,9 +1146,22 @@ async function sendRagMessage() {
         _updateQueueBadge();
         return;
     }
-    
+
     // 添加用户消息
     addRagMessage('user', question);
+    // 立即存入 session，切换会话后回来还能看到问题
+    const _sess0 = sessions.find(s => s.id === thisSessionId);
+    if (_sess0) {
+        if (_sess0.messages.length === 0) {
+            _sess0.title = question.slice(0, 30);
+            const titleEl = document.getElementById('rag-session-title');
+            if (titleEl && thisSessionId === currentSessionId) titleEl.textContent = _sess0.title;
+        }
+        _sess0.messages.push({ role: 'user', content: question });
+        saveSessions();
+        renderSessionList();
+        syncSessionSelect();
+    }
     input.value = '';
     input.style.height = 'auto';
     
@@ -1136,6 +1178,7 @@ async function sendRagMessage() {
             </div>
         </div>`;
     isRagStreaming = true;
+    _setSessionLoading(currentSessionId, true);
     const liveSteps = [...assistantBubble.querySelectorAll('.rag-live-steps span')];
     let liveStepIndex = 0;
     const liveProgressTimer = setInterval(() => {
@@ -1309,21 +1352,25 @@ async function sendRagMessage() {
         // 图表：直接渲染在当前气泡内（内联显示，html设置后再渲染）
         // Chart actions are now shown as chat-bubble buttons; no auto modal trigger.
 
-        // 保存到当前 session
+        // 保存到本次请求的 session（用 thisSessionId，防止用户切换后存错）
         setTimeout(() => executeAgentUiActions(data, question, assistantBubble), 180);
-        const session = getCurrentSession();
+        const session = sessions.find(s => s.id === thisSessionId);
         if (session) {
-            // Auto-title from first message
-            if (session.messages.length === 0) {
-                session.title = question.slice(0, 30);
-                const titleEl = document.getElementById('rag-session-title');
-                if (titleEl) titleEl.textContent = session.title;
+            // 用户问题已在发送时存入，只追加 assistant 回复
+            // （若因异常未存入则补存，保证配对完整）
+            const lastMsg = session.messages[session.messages.length - 1];
+            if (!lastMsg || lastMsg.role !== 'user' || lastMsg.content !== question) {
+                session.messages.push({ role: 'user', content: question });
             }
-            session.messages.push({ role: 'user', content: question });
             session.messages.push({ role: 'assistant', content: finalAnswer, html: html });
             saveSessions();
-            renderSessionList();
-            syncSessionSelect();
+            // 只有当前显示的就是本次会话时才更新标题和列表；否则只存数据
+            if (thisSessionId === currentSessionId) {
+                renderSessionList();
+                syncSessionSelect();
+            } else {
+                renderSessionList(); // 侧边栏条目更新（消息数变化）
+            }
         }
         
     } catch (err) {
@@ -1348,6 +1395,7 @@ async function sendRagMessage() {
     } finally {
         clearInterval(liveProgressTimer);
         isRagStreaming = false;
+        _setSessionLoading(currentSessionId, false);
         ragController = null;
         if (sendBtn) { sendBtn.disabled = false; sendBtn.style.display = 'flex'; }
         if (stopBtn) stopBtn.style.display = 'none';
