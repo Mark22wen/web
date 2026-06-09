@@ -87,6 +87,7 @@ rag-backend/
 | 文件 | 语言 | 作用 |
 |------|------|------|
 | `public/convert_to_json.py` | Python | 将 Excel 原始数据表转换为 `data.json`，是平台数据的唯一来源 |
+| `ingest.js` | Node.js | 将 `data.json` 中的结构化数据转为自然语言段落并写入 ChromaDB |
 | `knowledge_ingest.py` | Python | 将 `public/资料/` 下的 PDF、Word、Excel 文档向量化后写入 ChromaDB |
 | `url_ingest.py` | Python | 爬取指定网页/微信文章写入 ChromaDB（可选，补充网络内容） |
 | `check_chroma.py` | Python | 诊断工具：检查 ChromaDB 连接状态和已存储文档数量 |
@@ -142,7 +143,13 @@ chroma run --path ./chroma_db
 
 **第 5 步：知识文档入库**
 
-将 PDF / Word / Excel 报告放入 `public/资料/`，然后运行：
+若需要从零重建完整向量库，先将 `data.json` 中的结构化数据写入 ChromaDB：
+
+```bash
+node ingest.js
+```
+
+再将 PDF / Word / Excel 报告放入 `public/资料/`，然后运行：
 
 ```bash
 # 安装 Python 依赖（首次）
@@ -182,6 +189,7 @@ npm start
 | 场景 | 操作 |
 |------|------|
 | **更新统计数据**（新一年 Excel） | 替换 Excel → 重跑 `python public/convert_to_json.py` → 重启 `server.js` |
+| **重建结构化数据向量库** | 确认 ChromaDB 与 Ollama/bge-m3 已启动 → 运行 `node ingest.js` |
 | **新增报告 PDF** | 把 PDF 放入 `public/资料/` → 运行 `python knowledge_ingest.py` |
 | **重建特定文档**（内容改动） | `python knowledge_ingest.py --file 报告名.pdf --force` |
 | **全量重建知识库**（换嵌入模型） | `python knowledge_ingest.py --drop-collection` → `python knowledge_ingest.py --force` |
@@ -197,8 +205,10 @@ npm start
         │
         ▼
 convert_to_json.py  ──→  data.json  ──→  server.js（启动时加载）
-                                                │
-public/资料/*.pdf                              ▼
+        │                                       │
+        └────────────→  ingest.js  ────────────┤
+                                                ▼
+public/资料/*.pdf
 public/资料/*.docx   ──→  knowledge_ingest.py  ──→  ChromaDB（知识向量库）
 public/资料/*.xlsx                                       │
 url_ingest.py（网页）──────────────────────────────────┘
@@ -298,7 +308,7 @@ chroma run --path ./chroma_db
 
 ### 向量库初始化（首次使用）
 
-将 PDF/Word/Excel 知识文档写入 ChromaDB 使用本仓库的 `knowledge_ingest.py`。写入后 server.js 在启动时自动连接并建立 BM25 索引。
+将 `data.json` 结构化数据写入 ChromaDB 使用 `node ingest.js`；将 PDF/Word/Excel 知识文档写入 ChromaDB 使用 `knowledge_ingest.py`。写入后 server.js 在启动时自动连接并建立 BM25 索引。
 
 若 `patent_knowledge` Collection 为空，平台会使用本地混合索引兜底，正常功能不受影响。
 
@@ -337,6 +347,7 @@ chroma run --path ./chroma_db
 
 | 资料类型 | 存放位置 | 处理方式 |
 |----------|----------|----------|
+| 结构化统计数据 | `data.json` | `ingest.js` 将全国/省份/地级市数据转为自然语言段落，使用 bge-m3 向量化后写入 ChromaDB |
 | PDF 报告、白皮书（政策文件、行业报告） | `public/资料/*.pdf` | `knowledge_ingest.py` 用 pymupdf4llm / pdfplumber 提取正文，按 600 字切块（重叠 100 字），bge-m3 向量化后存入 ChromaDB |
 | Word 文档（.docx） | `public/资料/*.docx` | 同上（python-docx 提取段落） |
 | 名单类 Excel（`.xlsx`） | `public/资料/PDF名单/` | 由 `knowledge_ingest.py` 以"整行描述"格式读取，作为知识文档入库 |
@@ -348,7 +359,7 @@ chroma run --path ./chroma_db
 
 | 内容 | 原因 |
 |------|------|
-| 原始 Excel 统计数据（`基础数据汇总.xlsx`） | 走独立的 ETL 流程 `convert_to_json.py → data.json`，不入向量库，由 server.js 直接查询 |
+| 原始 Excel 统计数据（`基础数据汇总.xlsx`） | 不直接入库，先通过 `convert_to_json.py` 转为 `data.json`，再由 `ingest.js` 写入向量库 |
 | PDF 中的图片、表格图（非文字部分） | 默认跳过；若本地有 LLaVA 视觉模型，运行 `python knowledge_ingest.py`（不带 `--no-vision`）可自动识别图表内容 |
 | 未放入 `public/资料/` 的文件 | `knowledge_ingest.py` 只扫描该目录，其他位置不会被入库 |
 
@@ -651,6 +662,7 @@ rag-backend-final/
 ├── .env
 ├── public/
 ├── chroma_db/
+├── ingest.js
 ├── knowledge_ingest.py
 ├── url_ingest.py
 ├── check_chroma.py
