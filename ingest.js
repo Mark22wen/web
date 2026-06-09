@@ -184,6 +184,7 @@ async function batchEmbed(texts) {
 
 // ========== 主流程 ==========
 async function main() {
+    const forceRebuild = process.argv.includes('--force');
     console.log('🚀 开始灌入数据...');
     console.log(`📡 Ollama: ${OLLAMA_URL}  模型: ${OLLAMA_EMBED_MODEL}`);
     console.log(`📦 ChromaDB: ${CHROMA_HOST}:${CHROMA_PORT}  集合: ${COLLECTION_NAME}`);
@@ -230,8 +231,8 @@ async function main() {
             metadata: { 'hnsw:space': 'cosine' }
         });
         const existingCount = await collection.count();
-        if (existingCount > 0) {
-            console.log(`  ⚠️  集合已有 ${existingCount} 条数据`);
+        if (existingCount > 0 && forceRebuild) {
+            console.log(`  ⚠️  集合已有 ${existingCount} 条数据，--force 模式重建`);
             console.log('  🗑️  清空旧数据，重新灌入...');
             await chroma.deleteCollection({ name: COLLECTION_NAME });
             collection = await chroma.getOrCreateCollection({
@@ -240,6 +241,9 @@ async function main() {
                 metadata: { 'hnsw:space': 'cosine' }
             });
             console.log('  ✅ 集合已重建');
+        } else if (existingCount > 0) {
+            console.log(`  ✅ 集合已有 ${existingCount} 条数据，跳过（用 --force 强制重建）`);
+            process.exit(0);
         } else {
             console.log('  ✅ 集合为空，准备写入');
         }

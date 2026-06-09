@@ -343,23 +343,34 @@ function enterSdufeCover() {
     const cover = document.getElementById('sdufe-cover');
     if (!cover) return;
     cover.classList.add('slide-out');
-    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
     setTimeout(() => {
         cover.style.display = 'none';
         document.body.classList.remove('sdufe-cover-active');
         document.body.classList.add('sdufe-cover-seen');
-        initLanding();
+        // 封面退出后直接进入平台，不经过 hero 页
+        enterDashboard();
     }, 420);
 }
 
 function returnToSdufeCover() {
     const cover = document.getElementById('sdufe-cover');
     if (!cover) return;
+    // 隐藏 dashboard，显示 landing（封面是 landing 的子元素）
+    const dp = document.getElementById('dashboard-page');
+    const lp = document.getElementById('landing-page');
+    const rag = document.getElementById('rag-fullscreen');
+    const fab = document.getElementById('chat-float-btn');
+    if (dp) dp.style.display = 'none';
+    if (rag) rag.style.display = 'none';
+    if (fab) fab.style.display = 'none';
+    document.body.classList.remove('rag-open');
+    // 先让 landing-page 可见（封面在其内部）
+    if (lp) { lp.style.display = 'block'; lp.style.opacity = '1'; lp.style.transform = 'none'; }
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
     document.body.classList.add('sdufe-cover-active');
+    document.body.classList.remove('sdufe-cover-seen');
     cover.style.display = 'flex';
     cover.classList.remove('slide-out');
-    document.body.classList.remove('sdufe-cover-seen');
 }
 
 function initSdufeCover() {
@@ -664,6 +675,7 @@ function enterDashboard(tab) {
             }, 400);
         } else if (tab === 'table') {
             setTimeout(() => {
+                toggleTableSection(true); // 点击明细查询时自动展开
                 const t = document.getElementById('section-table');
                 if (t) t.scrollIntoView({behavior:'smooth',block:'start'});
             }, 400);
@@ -747,13 +759,7 @@ function initLandingScrollHint() {
     initLandingScrollHint._bound = true;
     const hint = document.querySelector('.hero-scroll-hint');
     if (hint) hint.style.display = 'none';
-    const features = document.getElementById('features-section');
-    if (features && !document.querySelector('.landing-section-divider')) {
-        const divider = document.createElement('div');
-        divider.className = 'landing-section-divider';
-        divider.innerHTML = '<span>核心模块</span>';
-        features.parentNode.insertBefore(divider, features);
-    }
+    // landing-section-divider removed
     const update = () => {
         const landing = document.getElementById('landing-page');
         if (!landing) return;
@@ -873,13 +879,25 @@ function openRagFullscreen(options = {}) {
     }
     rag.style.display = 'flex';
     document.body.classList.add('rag-open');
+    // 恢复侧边栏折叠状态
+    try {
+        const sidebar = document.getElementById('rag-sidebar');
+        if (sidebar && localStorage.getItem('ragSidebarCollapsed') === '1') sidebar.classList.add('collapsed');
+        else if (sidebar) sidebar.classList.remove('collapsed');
+    } catch(e) {}
     const fab = document.getElementById('chat-float-btn');
     if (fab) fab.style.display = 'none';
     
-    // Init session: each page visit starts with a fresh chat, while history remains available.
+    // Init session: 复用现有空对话，避免重复建立
     if (ragAutoFreshSessionPending) {
         ragAutoFreshSessionPending = false;
-        startNewSession();
+        // 有当前空对话直接复用，否则才新建
+        const existingEmpty = sessions.find(s => s.messages.length === 0);
+        if (existingEmpty) {
+            switchSession(existingEmpty.id);
+        } else {
+            startNewSession();
+        }
         const hint = document.getElementById('rag-context-hint');
         if (hint) hint.innerHTML = '<span>新对话已开启，左侧可切换历史对话。</span>';
     } else if (!currentSessionId) {
@@ -904,6 +922,15 @@ function openRagFullscreen(options = {}) {
     }
     
     setTimeout(() => document.getElementById('rag-input')?.focus(), 100);
+}
+
+function toggleRagSidebar() {
+    const sidebar = document.getElementById('rag-sidebar');
+    const btn = document.getElementById('sidebar-toggle-btn');
+    if (!sidebar) return;
+    const collapsed = sidebar.classList.toggle('collapsed');
+    // 持久化状态
+    try { localStorage.setItem('ragSidebarCollapsed', collapsed ? '1' : '0'); } catch(e) {}
 }
 
 function closeRagFullscreen() {
@@ -933,6 +960,244 @@ function sendRagQuick(question) {
 }
 
 let isRagStreaming = false;
+let ragController = null;
+const ragQueue = [];   // 追问队列
+
+function stopRagGeneration() {
+    if (ragController) {
+        ragController.abort();
+        ragController = null;
+    }
+    ragQueue.length = 0; // 停止时也清空队列
+    _updateQueueBadge();
+}
+
+function toggleTableSection(forceOpen) {
+    const body = document.getElementById('table-body-section');
+    const icon = document.getElementById('table-collapse-icon');
+    if (!body) return;
+    const isOpen = forceOpen !== undefined ? forceOpen : body.style.display === 'none';
+    body.style.display = isOpen ? 'block' : 'none';
+    if (icon) icon.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
+}
+
+function _updateSendBtnMode(inputVal) {
+    const btn   = document.getElementById('rag-send');
+    const icon  = document.getElementById('rag-send-icon');
+    const label = document.getElementById('rag-send-label');
+    if (!btn) return;
+    const isFollowUp = isRagStreaming && inputVal;
+    btn.classList.toggle('follow-up-mode', !!isFollowUp);
+    if (icon)  icon.style.display  = isFollowUp ? 'none' : '';
+    if (label) label.style.display = isFollowUp ? 'inline' : 'none';
+    btn.title = isFollowUp ? '追问（AI 回答完后自动发送）' : '发送';
+}
+
+function _updateQueueBadge() {
+    const wrap = document.getElementById('rag-queue-badge');
+    if (!wrap) return;
+    if (ragQueue.length > 0) {
+        wrap.querySelector('span').textContent = `${ragQueue.length} 条消息等待中`;
+        wrap.style.display = 'inline-flex';
+    } else {
+        wrap.style.display = 'none';
+    }
+}
+
+// 处理队列中的追问（用户气泡已显示，直接触发AI回答）
+async function _sendRagQueued(question) {
+    const input = document.getElementById('rag-input');
+    const sendBtn = document.getElementById('rag-send');
+    const stopBtn = document.getElementById('rag-stop');
+    const hint = document.getElementById('rag-context-hint');
+
+    const assistantBubble = addRagMessage('assistant', '', true);
+    assistantBubble.innerHTML = `
+        <div class="rag-live-process">
+            <div class="rag-live-title">正在思考与检索...</div>
+            <div class="rag-live-steps">
+                <span class="active">识别问题</span><span>查找数据</span>
+                <span>调用工具</span><span>组织回复</span>
+            </div>
+        </div>`;
+    isRagStreaming = true;
+    const liveSteps = [...assistantBubble.querySelectorAll('.rag-live-steps span')];
+    let liveStepIndex = 0;
+    const liveProgressTimer = setInterval(() => {
+        liveStepIndex = Math.min(liveStepIndex + 1, liveSteps.length - 1);
+        liveSteps.forEach((s, i) => s.classList.toggle('active', i <= liveStepIndex));
+    }, 850);
+
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.style.display = 'none'; }
+    if (stopBtn) stopBtn.style.display = 'flex';
+    ragController = new AbortController();
+    if (hint) hint.innerHTML = '<span>正在检索数据...</span>';
+
+    try {
+        const sessionId = getCurrentSession()?.id || 'default';
+        const response = await fetch('/api/agent/stream', {
+            signal: ragController.signal,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question, sessionId })
+        });
+        if (!response.ok) throw new Error(`服务器错误 ${response.status}`);
+
+        // SSE 流式读取（同 sendRagMessage）
+        const reader2 = response.body.getReader();
+        const decoder2 = new TextDecoder();
+        let sseBuffer2 = '', streamText2 = '', textEl2 = null, data = null;
+        const liveStepEls2 = [...assistantBubble.querySelectorAll('.rag-live-steps span')];
+        while (true) {
+            const { done: d2, value: v2 } = await reader2.read();
+            if (d2) break;
+            sseBuffer2 += decoder2.decode(v2, { stream: true });
+            const lines2 = sseBuffer2.split('\n'); sseBuffer2 = lines2.pop();
+            for (const ln of lines2) {
+                if (!ln.startsWith('data: ')) continue;
+                let e; try { e = JSON.parse(ln.slice(6)); } catch { continue; }
+                if (e.type === 'status') {
+                    liveStepEls2.forEach((s, i) => s.classList.toggle('active', i <= e.step));
+                    const t = assistantBubble.querySelector('.rag-live-title'); if (t) t.textContent = e.text;
+                } else if (e.type === 'token') {
+                    if (!textEl2) { assistantBubble.innerHTML = '<div class="rag-stream-text"></div>'; textEl2 = assistantBubble.querySelector('.rag-stream-text'); }
+                    streamText2 += e.text; textEl2.textContent = streamText2;
+                    const mb = document.getElementById('rag-messages'); if (mb) mb.scrollTop = mb.scrollHeight;
+                } else if (e.type === 'done') { data = e; }
+                else if (e.type === 'error') { throw new Error(e.text); }
+            }
+        }
+        if (!data) data = {};
+        const finalAnswer2 = streamText2 || data.answer || '无回答';
+        data.answer = finalAnswer2; // 供报告导出使用
+        let html = '';
+        if (data.reasoning?.length) {
+            html += `<details class="rag-process-details"><summary>已完成思考过程</summary>
+                ${data.reasoning.map(r => `<div class="rag-method-item"><span>${escapeHtml(r)}</span></div>`).join('')}
+            </details>`;
+        }
+        html += `<div class="rag-answer-content">${formatAnswer(finalAnswer2)}</div>`;
+        if (data.citations?.length) {
+            html += `<div class="rag-citations"><div class="rag-citation-head">数据来源</div>
+                <div class="rag-citation-list">${data.citations.slice(0,3).map(c => `<span class="rag-citation">${escapeHtml(c)}</span>`).join('')}</div></div>`;
+        }
+        if (data.suggestions?.length) {
+            html += `<div class="rag-suggestions">${data.suggestions.map(s => `<button class="rag-suggestion" type="button" data-question="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join('')}</div>`;
+        }
+        assistantBubble.innerHTML = html;
+        assistantBubble.classList.remove('streaming-cursor');
+        _appendRegenerateBtn(assistantBubble, question);
+        setTimeout(() => executeAgentUiActions(data, question, assistantBubble), 180);
+        const session = getCurrentSession();
+        if (session) {
+            session.messages.push({ role: 'user', content: question });
+            session.messages.push({ role: 'assistant', content: finalAnswer2, html });
+            saveSessions(); renderSessionList(); syncSessionSelect();
+        }
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            if (assistantBubble.textContent.trim() === '')
+                assistantBubble.innerHTML = `<span style="color:var(--c-muted);font-size:.85rem;">已停止回答</span>`;
+            else
+                assistantBubble.innerHTML += `<div style="margin-top:8px;color:var(--c-muted);font-size:.8rem;border-top:1px solid var(--c-border);padding-top:6px;">— 已停止</div>`;
+            _appendRegenerateBtn(assistantBubble, question);
+            return;
+        }
+        assistantBubble.innerHTML = `<div style="color:var(--c-danger)">请求失败: ${escapeHtml(err.message)}</div>`;
+    } finally {
+        clearInterval(liveProgressTimer);
+        isRagStreaming = false;
+        ragController = null;
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.style.display = 'flex'; }
+        if (stopBtn) stopBtn.style.display = 'none';
+        if (ragQueue.length > 0) {
+            const next = ragQueue.shift();
+            _updateQueueBadge();
+            setTimeout(() => _sendRagQueued(next), 120);
+        }
+    }
+}
+
+function _appendRegenerateBtn(bubble, question) {
+    if (!question || !bubble) return;
+    const bar = document.createElement('div');
+    bar.className = 'rag-regen-bar';
+    bar.innerHTML = `
+        <button class="rag-regen-btn" title="重新生成">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 4v6h6"/><path d="M23 20v-6h-6"/>
+                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+            </svg>
+            重新生成
+        </button>
+        <button class="rag-copy-btn" title="复制回答">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            复制
+        </button>
+        <button class="rag-followup-btn" title="追问此回答">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                <line x1="9" y1="10" x2="15" y2="10"/><line x1="9" y1="14" x2="13" y2="14"/>
+            </svg>
+            追问此回答
+        </button>`;
+    bar.querySelector('.rag-copy-btn').onclick = function() {
+        const answerEl = bubble.querySelector('.rag-answer-content');
+        const text = answerEl ? (answerEl.innerText || answerEl.textContent) : bubble.innerText;
+        navigator.clipboard.writeText(text).then(() => {
+            this.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> 已复制`;
+            setTimeout(() => { this.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> 复制`; }, 2000);
+        });
+    };
+
+    bar.querySelector('.rag-followup-btn').onclick = function() {
+        // 取该气泡的回答文字摘要（前100字）
+        const answerEl = bubble.querySelector('.rag-answer-content');
+        const answerExcerpt = (answerEl ? (answerEl.innerText || answerEl.textContent) : bubble.innerText)
+            .replace(/\s+/g, ' ').trim().slice(0, 100);
+        // 同时记录触发该回答的用户问题（前60字）
+        const questionExcerpt = String(question || '').replace(/（追问关于[\s\S]*?）\n?/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+        const input = document.getElementById('rag-input');
+        if (!input) return;
+
+        // 注入追问前缀标记（包含 Q+A 对，让 server 端 LLM 理解完整上下文）
+        window._ragFollowupContext = questionExcerpt
+            ? `问：${questionExcerpt} → 答：${answerExcerpt}`
+            : answerExcerpt;
+        input.value = '';
+        input.focus();
+
+        // 在输入框上方显示追问标记（只显示问题部分，更简洁）
+        const badgeLabel = questionExcerpt || answerExcerpt;
+        let badge = document.getElementById('rag-followup-badge');
+        if (!badge) {
+            badge = document.createElement('div');
+            badge.id = 'rag-followup-badge';
+            badge.className = 'rag-followup-badge';
+            input.parentNode.insertBefore(badge, input);
+        }
+        badge.innerHTML = `<span>追问：「${badgeLabel.slice(0, 40)}${badgeLabel.length > 40 ? '…' : ''}」</span>
+            <button onclick="clearFollowupContext()" title="取消">×</button>`;
+
+        // 气泡高亮
+        document.querySelectorAll('.rag-message.followup-target').forEach(el => el.classList.remove('followup-target'));
+        bubble.closest('.rag-message')?.classList.add('followup-target');
+    };
+    bar.querySelector('.rag-regen-btn').onclick = () => {
+        // 删除当前AI气泡和对应的用户消息气泡
+        const msgWrap = bubble.closest('.rag-message');
+        const userWrap = msgWrap?.previousElementSibling;
+        msgWrap?.remove();
+        if (userWrap?.classList.contains('rag-message')) userWrap.remove();
+        // 重新发送
+        const input = document.getElementById('rag-input');
+        if (input) { input.value = question; }
+        sendRagMessage();
+    };
+    bubble.appendChild(bar);
+}
 
 // ===== Multi-session conversation management =====
 let sessions = JSON.parse(localStorage.getItem('rag_sessions') || '[]');
@@ -949,7 +1214,44 @@ function createSession(title) {
 }
 
 function saveSessions() {
+    // 保存前清理多余的空对话（最多保留 1 个）
+    const emptyOnes = sessions.filter(s => s.messages.length === 0);
+    if (emptyOnes.length > 1) {
+        const keepId = currentSessionId || emptyOnes[0].id;
+        sessions = sessions.filter(s => s.messages.length > 0 || s.id === keepId);
+    }
     try { localStorage.setItem('rag_sessions', JSON.stringify(sessions)); } catch(e) {}
+}
+
+function clearFollowupContext() {
+    window._ragFollowupContext = null;
+    const badge = document.getElementById('rag-followup-badge');
+    if (badge) badge.remove();
+    document.querySelectorAll('.rag-message.followup-target').forEach(el => el.classList.remove('followup-target'));
+}
+
+// ── 导出当前对话为 Markdown 文件 ────────────────────────────
+function exportCurrentSession() {
+    const session = getCurrentSession();
+    if (!session || !session.messages.length) {
+        alert('当前对话没有内容可导出');
+        return;
+    }
+    const lines = [`# ${session.title || '对话记录'}`, `> 导出时间：${new Date().toLocaleString('zh-CN')}`, ''];
+    session.messages.forEach(m => {
+        if (m.role === 'user') {
+            lines.push(`## 🙋 用户`, '', m.content, '');
+        } else {
+            lines.push(`## 🤖 助手`, '', m.content || '', '');
+        }
+    });
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${session.title || '对话'}_${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
 function getCurrentSession() {
@@ -975,14 +1277,23 @@ function switchSession(id) {
             <p>查询数据 · 分析趋势 · 对比地区 · 预测未来</p>
         </div>`;
     } else {
-        session.messages.forEach(msg => {
+        // 配对 user/assistant 消息，以便恢复时为 assistant 气泡挂上重新生成/追问按钮
+        const msgs = session.messages;
+        msgs.forEach((msg, idx) => {
             const div = document.createElement('div');
             div.className = 'rag-message ' + msg.role;
-            const avatarHtml = msg.role === 'user' 
+            const avatarHtml = msg.role === 'user'
                 ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-user"/></svg>'
                 : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-brain"/></svg>';
             div.innerHTML = '<div class="rag-avatar">' + avatarHtml + '</div><div class="rag-bubble">' + (msg.role === 'user' ? escapeHtml(msg.content) : msg.html || escapeHtml(msg.content)) + '</div>';
             container.appendChild(div);
+            // 恢复 assistant 气泡的重新生成/追问按钮
+            if (msg.role === 'assistant') {
+                const bubble = div.querySelector('.rag-bubble');
+                // 找对应的 user 问题（前一条或更前面的 user 消息）
+                const userMsg = msgs.slice(0, idx).reverse().find(m => m.role === 'user');
+                if (bubble && userMsg) _appendRegenerateBtn(bubble, userMsg.content);
+            }
         });
         container.scrollTop = container.scrollHeight;
     }
@@ -1074,6 +1385,14 @@ document.addEventListener('dblclick', function(e) {
 });
 
 function startNewSession() {
+    // 当前会话已是空对话，不重复创建
+    const current = getCurrentSession();
+    if (current && current.messages.length === 0) return;
+
+    // 清理其他空对话（避免积累）
+    sessions = sessions.filter(s => s.messages.length > 0 || s.id === currentSessionId);
+    saveSessions();
+
     const session = createSession('新对话');
     switchSession(session.id);
 }
@@ -1096,8 +1415,24 @@ Object.defineProperty(window, 'ragHistory', {
 
 async function sendRagMessage() {
     const input = document.getElementById('rag-input');
-    const question = input?.value.trim();
-    if (!question || isRagStreaming) return;
+    let question = input?.value.trim();
+    if (!question) return;
+
+    // 若有追问锚点，在问题里注入 Q+A 上下文（服务端 LLM 会读到这段）
+    if (window._ragFollowupContext) {
+        question = `（追问上下文：${window._ragFollowupContext}）\n${question}`;
+        clearFollowupContext();
+    }
+
+    // 正在回答时：入队，立即显示用户消息气泡，清空输入框
+    if (isRagStreaming) {
+        ragQueue.push(question);
+        input.value = '';
+        input.style.height = 'auto';
+        addRagMessage('user', question); // 先显示用户消息
+        _updateQueueBadge();
+        return;
+    }
     
     // 添加用户消息
     addRagMessage('user', question);
@@ -1126,34 +1461,86 @@ async function sendRagMessage() {
     }, 850);
     
     const sendBtn = document.getElementById('rag-send');
-    if (sendBtn) sendBtn.disabled = true;
-    
+    const stopBtn = document.getElementById('rag-stop');
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.style.display = 'none'; }
+    if (stopBtn) stopBtn.style.display = 'flex';
+
+    ragController = new AbortController();
+
     // 更新上下文提示
     const hint = document.getElementById('rag-context-hint');
     if (hint) hint.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-search"/></svg><span>正在检索数据...</span>';
-    
+
     try {
-        const response = await fetch('/api/agent', {
+        const response = await fetch('/api/agent/stream', {
+            signal: ragController.signal,
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 question,
-                sessionId: currentSessionId || 'default',
-                history: (getCurrentSession()?.messages || []).slice(-8).map(m => ({ role: m.role, content: m.content }))
+                sessionId: currentSessionId || 'default'
             })
         });
-        
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || '请求失败');
+        if (!response.ok) throw new Error(`服务器错误 ${response.status}`);
+
+        // ── SSE 流式读取 ──────────────────────────────────────────
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let sseBuffer = '';
+        let streamText = '';       // 累积的原始文字（用于最终格式化）
+        let textEl = null;         // 流式文字容器
+        let data = null;           // done 事件的元数据
+
+        const liveStepEls = [...assistantBubble.querySelectorAll('.rag-live-steps span')];
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            sseBuffer += decoder.decode(value, { stream: true });
+            const lines = sseBuffer.split('\n');
+            sseBuffer = lines.pop(); // 保留不完整行
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                let evt;
+                try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+
+                if (evt.type === 'status') {
+                    // 同步到进度步骤
+                    liveStepEls.forEach((s, i) => s.classList.toggle('active', i <= evt.step));
+                    const titleEl = assistantBubble.querySelector('.rag-live-title');
+                    if (titleEl) titleEl.textContent = evt.text;
+
+                } else if (evt.type === 'token') {
+                    if (!textEl) {
+                        // 第一个 token：替换 loading 动画为流式文字区
+                        assistantBubble.innerHTML = '<div class="rag-stream-text"></div>';
+                        textEl = assistantBubble.querySelector('.rag-stream-text');
+                    }
+                    streamText += evt.text;
+                    textEl.textContent = streamText; // 纯文本快速渲染
+                    // 滚动到底
+                    const msgBox = document.getElementById('rag-messages');
+                    if (msgBox) msgBox.scrollTop = msgBox.scrollHeight;
+
+                } else if (evt.type === 'done') {
+                    data = evt;
+
+                } else if (evt.type === 'error') {
+                    throw new Error(evt.text);
+                }
+            }
+        }
+
+        if (!data) data = {}; // 防止 done 事件丢失
         
         if (hint) {
             const citationCount = data.citations?.length || 0;
-            hint.textContent = citationCount > 0 
-                ? `基于 ${citationCount} 个数据源生成回答` 
+            hint.textContent = citationCount > 0
+                ? `基于 ${citationCount} 个数据源生成回答`
                 : '回答生成完成';
         }
-        
-        // 构建HTML
+
         let html = '';
         let processHtml = '';
         
@@ -1207,9 +1594,11 @@ async function sendRagMessage() {
             </details>`;
         }
         
-        // 主回答
-        html += `<div class="rag-answer-content">${formatAnswer(data.answer || '无回答')}</div>`;
-        if (hasPotentialMissingValueProcessingFromText(data.answer || '')) {
+        // 主回答（用流式累积的文字做最终格式化）
+        const finalAnswer = streamText || data.answer || '无回答';
+        data.answer = finalAnswer; // 供报告导出使用
+        html += `<div class="rag-answer-content">${formatAnswer(finalAnswer)}</div>`;
+        if (hasPotentialMissingValueProcessingFromText(finalAnswer)) {
             html += dataProcessingNoticeHtml();
         }
         
@@ -1231,10 +1620,13 @@ async function sendRagMessage() {
         
         assistantBubble.innerHTML = html;
         assistantBubble.classList.remove('streaming-cursor');
-        
+
+        // 重新生成按钮
+        _appendRegenerateBtn(assistantBubble, question);
+
         // 图表：直接渲染在当前气泡内（内联显示，html设置后再渲染）
         // Chart actions are now shown as chat-bubble buttons; no auto modal trigger.
-        
+
         // 保存到当前 session
         setTimeout(() => executeAgentUiActions(data, question, assistantBubble), 180);
         const session = getCurrentSession();
@@ -1246,13 +1638,23 @@ async function sendRagMessage() {
                 if (titleEl) titleEl.textContent = session.title;
             }
             session.messages.push({ role: 'user', content: question });
-            session.messages.push({ role: 'assistant', content: data.answer || '', html: html });
+            session.messages.push({ role: 'assistant', content: finalAnswer, html: html });
             saveSessions();
             renderSessionList();
             syncSessionSelect();
         }
         
     } catch (err) {
+        if (err.name === 'AbortError') {
+            if (hint) hint.textContent = '已停止';
+            if (assistantBubble.textContent.trim() === '') {
+                assistantBubble.innerHTML = `<span style="color:var(--c-muted);font-size:.85rem;">已停止回答</span>`;
+            } else {
+                assistantBubble.innerHTML += `<div style="margin-top:8px;color:var(--c-muted);font-size:.8rem;border-top:1px solid var(--c-border);padding-top:6px;">— 已停止</div>`;
+            }
+            _appendRegenerateBtn(assistantBubble, question);
+            return;
+        }
         console.error('RAG错误:', err);
         if (hint) hint.textContent = '连接失败';
         assistantBubble.innerHTML = `<div style="color: var(--danger);">
@@ -1264,7 +1666,18 @@ async function sendRagMessage() {
     } finally {
         clearInterval(liveProgressTimer);
         isRagStreaming = false;
-        if (sendBtn) sendBtn.disabled = false;
+        ragController = null;
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.style.display = 'flex'; }
+        if (stopBtn) stopBtn.style.display = 'none';
+        _updateSendBtnMode(document.getElementById('rag-input')?.value.trim() || '');
+
+        // 处理追问队列：取出下一条消息继续发送
+        if (ragQueue.length > 0) {
+            const next = ragQueue.shift();
+            _updateQueueBadge();
+            // 队列消息的用户气泡已经显示过了，直接用内部方式发送（跳过重复显示）
+            setTimeout(() => _sendRagQueued(next), 120);
+        }
     }
 }
 
@@ -1416,6 +1829,7 @@ function executeAgentUiActionsDeprecated(data, question, sourceBubble) {
         setTimeout(() => {
             if (intent.wantsTable) {
                 if (typeof setTableSheet === 'function') setTableSheet(sheet || tableSheet || currentSheet, { independent: false });
+                toggleTableSection(true); // 自动展开
                 document.getElementById('section-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
             } else if (intent.wantsScatter) {
                 const scatterSection = document.getElementById('section-scatter');
@@ -2082,7 +2496,7 @@ function _doRenderInlineChart(chartId, config, isModal) {
 
 // Auto-generate chart - now renders inline
 function autoGenerateChart(question, targetBubble) {
-    let metric = '科学支出水平';
+    let metric = metricNameList[0] || '科学支出水平';
     let region = null;
     
     if (window.workbook && window.workbook['省份']) {
@@ -2262,6 +2676,10 @@ async function clearConversation() {
         // Reset the chat UI to welcome screen
         const container = document.getElementById('rag-messages');
         if (container) {
+            const _prov = (window.workbook || {})['省份'] || [];
+            const _yrs = [...new Set(_prov.map(r => r['年份']).filter(Boolean))].sort((a,b)=>b-a);
+            const _ly = _yrs[0] || (new Date().getFullYear() - 1);
+            const _ny = _ly + 2;
             container.innerHTML = `<div class="rag-welcome">
                 <div class="rag-welcome-avatar">
                     <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg>
@@ -2269,21 +2687,21 @@ async function clearConversation() {
                 <h2>我是你的数据分析助手</h2>
                 <p>查询数据 · 分析趋势 · 对比地区 · 预测未来<br>所有回答均基于平台数据，附带来源溯源。</p>
                 <div class="rag-welcome-hints">
-                    <button class="rag-hint-btn" onclick="sendRagQuick('近5年长江学者数量趋势')">
+                    <button class="rag-hint-btn" onclick="sendRagQuick('${_ly}年各省杰青数量前10排名')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
+                        ${_ly}年各省杰青排名
+                    </button>
+                    <button class="rag-hint-btn" onclick="sendRagQuick('近5年全国长江学者数量趋势')">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-trend"/></svg>
                         近5年长江学者趋势
                     </button>
-                    <button class="rag-hint-btn" onclick="sendRagQuick('2023年各省杰青数量前10排名')">
-                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
-                        2023年各省杰青排名
-                    </button>
-                    <button class="rag-hint-btn" onclick="sendRagQuick('预测2026年全国普通高校数量')">
+                    <button class="rag-hint-btn" onclick="sendRagQuick('预测${_ny}年全国普通高校数量')">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-star"/></svg>
-                        预测2026年高校数量
+                        预测${_ny}年高校数量
                     </button>
-                    <button class="rag-hint-btn" onclick="sendRagQuick('江苏和浙江R&D投入强度对比')">
+                    <button class="rag-hint-btn" onclick="sendRagQuick('江苏和浙江R&amp;D投入强度对比')">
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-scatter"/></svg>
-                        江苏vs浙江R&D投入对比
+                        江苏vs浙江R&amp;D投入对比
                     </button>
                 </div>
             </div>`;
@@ -2373,11 +2791,81 @@ async function loadAllData() {
         if (typeof window.updateKPI === 'function') {
             try { window.updateKPI(data); } catch(e) {}
         }
+        // 用实际最新年份初始化快捷提问按钮
+        try { initQuickButtons(data); } catch(e) {}
         return window.workbook;
     } catch (error) {
         console.error('加载 data.json 失败', error);
         showToast('数据文件加载失败，请确保后端服务已启动（node server.js）', 'error');
         throw error;
+    }
+}
+
+// ======================= KPI 卡更新 =======================
+
+window.updateKPI = function(data) {
+    const national  = data['全国']  || [];
+    const province  = data['省份']  || [];
+    const city      = data['地级市'] || [];
+
+    // 总记录数
+    const total = national.length + province.length + city.length;
+    const recEl = document.getElementById('kpi-records');
+    if (recEl) recEl.textContent = total.toLocaleString('zh-CN');
+
+    // 年份跨度（取省份或全国）
+    const srcForYears = province.length ? province : national;
+    const years = [...new Set(srcForYears.map(r => r['年份'] ?? r['时间']))].filter(Boolean).sort((a,b)=>a-b);
+    const yearEl = document.getElementById('kpi-years');
+    if (yearEl && years.length) yearEl.textContent = years[0] + '–' + years[years.length - 1];
+
+    // 核心指标数（省份表去掉年份/地区后的列数）
+    const sampleProv = province[0] || {};
+    const metricCount = Object.keys(sampleProv).filter(k => k !== '年份' && k !== '地区').length;
+    const metEl = document.getElementById('kpi-metrics');
+    if (metEl) metEl.textContent = metricCount;
+
+    // 覆盖省份/城市数
+    const provinces = new Set(province.map(r => r['地区']).filter(Boolean));
+    const cities    = new Set(city.map(r => r['地区']).filter(Boolean));
+    const regEl = document.getElementById('kpi-regions');
+    if (regEl) regEl.textContent = provinces.size + ' 省 / ' + cities.size + ' 市';
+};
+
+// ======================= 快捷提问动态初始化 =======================
+
+function initQuickButtons(data) {
+    const province = data['省份'] || data['province'] || [];
+    const years = [...new Set(province.map(r => r['年份']).filter(Boolean))].sort((a, b) => b - a);
+    const ly = years[0] || new Date().getFullYear() - 1; // latestYear
+    const ny = ly + 2; // 预测年份
+
+    // 侧边栏快捷提问：4个不同维度（趋势/预测/报告/城市）
+    const sq = {
+        'sq-trend':    { q: `近10年工业机器人密度趋势`,           label: '机器人密度近10年趋势' },
+        'sq-forecast': { q: `预测${ny}年全国普通高校数量`,         label: `预测${ny}年高校数量` },
+        'sq-report':   { q: `根据全球智数化人才指数报告，中国的智数化人才排名情况`, label: '报告：中国人才排名' },
+        'sq-city':     { q: `济南市近5年科学支出水平趋势`,          label: '济南市科学支出趋势' }
+    };
+    for (const [id, cfg] of Object.entries(sq)) {
+        const btn = document.getElementById(id);
+        if (!btn) continue;
+        btn.textContent = cfg.label;
+        btn.onclick = () => sendRagQuick(cfg.q);
+    }
+
+    // 欢迎区 hint：4个入门级问题，维度差异化
+    const hints = {
+        'hint-ranking':  { q: `${ly}年各省杰青数量前10排名`,        label: `${ly}年各省杰青排名` },
+        'hint-trend':    { q: `近5年全国长江学者数量趋势`,            label: '近5年长江学者趋势' },
+        'hint-forecast': { q: `预测${ny}年全国普通高校数量`,          label: `预测${ny}年高校数量` },
+        'hint-compare':  { q: `江苏和浙江R&D投入强度对比`,            label: '江苏vs浙江R&D投入对比' }
+    };
+    for (const [id, cfg] of Object.entries(hints)) {
+        const btn = document.getElementById(id);
+        if (!btn) continue;
+        btn.textContent = cfg.label;
+        btn.onclick = () => sendRagQuick(cfg.q);
     }
 }
 
@@ -2401,11 +2889,13 @@ let selectedGroups = [];
 let sortKey = "", sortType = "asc";
 let custom = { title: "auto", xName: "auto", yName: "auto", yMax: "auto" };
 const COLORS = [
-    '#667eea', '#764ba2', '#f093fb', '#f5576c',
-    '#4facfe', '#00f2fe', '#43e97b', '#38f9d7',
-    '#fa709a', '#fee140', '#30cfd0', '#330867',
-    '#1e466e', '#368bc1', '#5f9d80', '#e68a2e',
-    '#b56576', '#6d597a', '#3cba54', '#db4437'
+    '#2563a8', '#e05c2b', '#2a9a58', '#c0392b', '#8e44ad',
+    '#d4a017', '#1a8f8f', '#e91e8c', '#1976d2', '#43a047',
+    '#ff6f00', '#5c6bc0', '#00838f', '#7cb342', '#6d4c41',
+    '#f06292', '#0288d1', '#e53935', '#00897b', '#7b1fa2',
+    '#fb8c00', '#0097a7', '#c62828', '#00acc1', '#827717',
+    '#ad1457', '#039be5', '#2e7d32', '#6a1b9a', '#4e342e',
+    '#558b2f'
 ];
 let pageSize = 20;
 let currentPage = 1;
@@ -2519,12 +3009,33 @@ function initDarkMode() {
     const coverToggle = document.getElementById('darkModeToggleCover');
     const isDarkMode = localStorage.getItem('darkMode') === 'true';
     
+    // favicon 始终白底合成
+    const setFaviconWithBg = (_dark) => {
+        const src = 'images/sdufe-logo.png?v=20260603';
+        const img = new Image();
+        img.onload = () => {
+            const c = document.createElement('canvas');
+            c.width = img.width; c.height = img.height;
+            const ctx = c.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, c.width, c.height);
+            ctx.drawImage(img, 0, 0);
+            const link = document.querySelector("link[rel~='icon']") || document.createElement('link');
+            link.rel = 'icon'; link.type = 'image/png';
+            link.href = c.toDataURL('image/png');
+            document.head.appendChild(link);
+        };
+        img.src = src;
+    };
+
     const applyDark = (dark) => {
         document.body.classList.toggle('dark-mode', dark);
         if (typeof window.updateDarkIcons === 'function') window.updateDarkIcons(dark);
         updateChartsTheme(dark);
+        setFaviconWithBg(dark);
     };
     
+    setFaviconWithBg(isDarkMode); // 页面加载时立即合成白底 favicon
     if (isDarkMode) applyDark(true);
 
     if (landingToggle && !landingToggle._dmBound) {
@@ -2574,6 +3085,7 @@ function updateChartsTheme(isDark) {
     const optionUpdate = {
         backgroundColor: 'transparent',
         textStyle: { color: textColor },
+        title: { textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }, subtextStyle: { color: isDark ? '#8fa6c8' : '#718096' } },
         xAxis: { axisLabel: { color: textColor }, axisLine: { lineStyle: { color: axisColor } }, axisTick: { lineStyle: { color: axisColor } }, splitLine: { lineStyle: { color: splitColor } } },
         yAxis: { axisLabel: { color: textColor }, axisLine: { lineStyle: { color: axisColor } }, axisTick: { lineStyle: { color: axisColor } }, splitLine: { lineStyle: { color: splitColor } } },
         legend: { textStyle: { color: textColor } },
@@ -2613,11 +3125,12 @@ function bindRagEvents() {
         ragInput.addEventListener('input', function() {
             this.style.height = 'auto';
             this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+            _updateSendBtnMode(this.value.trim());
         });
         ragInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                if (!isRagStreaming) sendRagMessage();
+                sendRagMessage(); // 排队逻辑在 sendRagMessage 里处理
             }
         });
     }
@@ -2858,6 +3371,7 @@ function setTableSheet(sheetName, options = {}) {
     const tableSearch = document.getElementById("search-input");
     if (tableSearch && options.independent) tableSearch.value = "";
     refreshColumnCheckboxList();
+    initTableSmartFilters();   // 切换工作表后重建年份/指标下拉
     applyFilterAndSort();
     renderTablePage();
     if (options.independent) showToast(`明细表已切换到：${tableSheet}`, 'success', 1600);
@@ -3220,10 +3734,10 @@ function renderMainChart() {
                     ])
                 }
             }]
-        }, true);
+        }, false);
         return;
     }
-    
+
     const years = [...new Set(originalRows.map(r => r["年份"]))].sort((a,b)=>a-b);
     const series = [];
     
@@ -3284,7 +3798,7 @@ function renderMainChart() {
             splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
         },
         series: series
-    }, true);
+    }, false);
 }
 
 // ======================= 轮播控制 =======================
@@ -3394,10 +3908,18 @@ function initPieChart() {
     if (resetHiddenBtn) resetHiddenBtn.onclick = () => applyPieProvinceSelection(pieProvinceList);
     syncPieProvinceCheckboxes();
     
-    const sample = provinceRows[0];
-    pieAvailableMetrics = Object.keys(sample).filter(k => k !== "年份" && k !== "地区" && typeof sample[k] === "number");
-    pieAvailableYears = [...new Set(provinceRows.map(r => r["年份"]))].sort();
-    pieCurrentYear = pieAvailableYears[pieAvailableYears.length-1];
+    // 扫描所有行，只要某列在任意一行有数值就纳入指标
+    const allMetricKeys = new Set();
+    provinceRows.forEach(row => Object.keys(row).forEach(k => allMetricKeys.add(k)));
+    pieAvailableMetrics = [...allMetricKeys].filter(k => {
+        if (k === "年份" || k === "地区") return false;
+        return provinceRows.some(row => {
+            const v = row[k];
+            return v !== null && v !== undefined && v !== "" && !isNaN(Number(v));
+        });
+    });
+    pieAvailableYears = [...new Set(provinceRows.map(r => String(r["年份"])))].sort();
+    pieCurrentYear = String(pieAvailableYears[pieAvailableYears.length-1]);
     pieCurrentMetricIndex = 0;
     
     const yearSel = document.getElementById("pie-year-select");
@@ -3413,7 +3935,7 @@ function initPieChart() {
             yearSel.appendChild(opt);
         });
         yearSel.onchange = () => {
-            pieCurrentYear = parseInt(yearSel.value);
+            pieCurrentYear = yearSel.value; // 保持字符串，与数据类型一致
             renderPieChart();
             if (!piePaused) startPieCarousel();
         };
@@ -3461,6 +3983,8 @@ function initPieChart() {
     }
     
     renderPieChart();
+    // 延迟 resize，确保容器宽度完全铺开后重绘
+    setTimeout(() => { try { pieChart?.resize(); renderPieChart(); } catch(e){} }, 80);
     startPieCarousel();
 }
 
@@ -3493,9 +4017,9 @@ function renderPieChart() {
     }
     const metric = pieAvailableMetrics[pieCurrentMetricIndex];
     const year = pieCurrentYear;
-    const provinceRows = window.workbook["省份"]?.filter(r => r["年份"] === year) || [];
+    const provinceRows = window.workbook["省份"]?.filter(r => String(r["年份"]) === String(year)) || [];
     
-    if (provinceRows.length === 0 || provinceRows.every(r => r[metric] === undefined || r[metric] === 0)) {
+    if (provinceRows.length === 0 || provinceRows.every(r => r[metric] === undefined || r[metric] === null)) {
         pieChart?.clear();
         pieChart?.setOption({ 
             title: { text: `无有效数据（${year}年 ${metric}）`, left: "center", top: "center" },
@@ -3506,21 +4030,15 @@ function renderPieChart() {
         return;
     }
     
-    const nationRow = window.workbook["全国"]?.find(r => r["年份"] === year);
-    let total = null;
-    let totalSource = "national";
-    
-    if (nationRow && nationRow[metric] !== undefined && nationRow[metric] !== 0) {
-        total = nationRow[metric];
-    } else {
-        total = provinceRows.reduce((sum, row) => sum + (row[metric] || 0), 0);
-        totalSource = "province_sum";
-    }
-    
+    // 始终用各省加总作分母：饼图展示"各省在全省合计中的占比"
+    // 避免比例型/指数型指标以全国值为分母导致占比失真
+    const total = provinceRows.reduce((sum, row) => sum + (Math.abs(Number(row[metric])) || 0), 0);
+    const totalSource = "province_sum";
+
     if (!total || total === 0) {
         pieChart?.clear();
-        pieChart?.setOption({ 
-            title: { text: `总量无效，无法计算占比`, left: "center", top: "center" },
+        pieChart?.setOption({
+            title: { text: `该指标各省均为0或无数据`, left: "center", top: "center" },
             backgroundColor: 'transparent'
         });
         return;
@@ -3533,7 +4051,7 @@ function renderPieChart() {
     
     for (let prov of pieProvinceList) {
         const row = provinceRows.find(r => r["地区"] === prov);
-        let val = row ? (row[metric] || 0) : 0;
+        let val = (row && row[metric] !== null && row[metric] !== undefined) ? Number(row[metric]) : 0;
         provinceSum += val;
         if (pieSelectedProvinces.has(prov)) {
             normalData.push({ name: prov, value: val, originalVal: val });
@@ -3543,11 +4061,6 @@ function renderPieChart() {
         }
     }
     
-    let otherValue = 0;
-    if (totalSource === "national" && total > provinceSum) {
-        otherValue = total - provinceSum;
-    }
-    
     let pieSeriesData = [];
     const colorPalette = [...COLORS];
     const isDark = document.body.classList.contains('dark-mode');
@@ -3555,36 +4068,31 @@ function renderPieChart() {
     normalData.forEach((item, idx) => {
         let percent = (item.value / total) * 100;
         if (percent > 0.01 || item.value === 0) {
-            pieSeriesData.push({ 
-                name: item.name, 
-                value: percent, 
-                originalVal: item.value, 
-                itemStyle: { color: colorPalette[idx % colorPalette.length] } 
+            // 视觉压缩：用 sqrt(percent) 作为 value，配合 roseType:"area"（area∝value）
+            // 最终 radius ∝ percent^0.25，大幅收窄极端值与其他省份的半径差距
+            pieSeriesData.push({
+                name: item.name,
+                value: Math.sqrt(percent),   // 仅用于视觉半径
+                realPercent: percent,         // 真实百分比，供 tooltip 显示
+                originalVal: item.value,
+                itemStyle: { color: colorPalette[idx % colorPalette.length] }
             });
         }
     });
-    
+
     if (hiddenSum > 0 && hiddenNames.length > 0) {
         let hiddenPercent = (hiddenSum / total) * 100;
         if (hiddenPercent > 0.01) {
             pieSeriesData.push({
                 name: `已隐藏省份 (${hiddenNames.length}省)`,
-                value: hiddenPercent,
+                value: Math.sqrt(hiddenPercent),
+                realPercent: hiddenPercent,
                 originalVal: hiddenSum,
                 itemStyle: { color: isDark ? '#94a3b8' : '#718096' }
             });
         }
     }
     
-    if (otherValue > 0) {
-        let otherPercent = (otherValue / total) * 100;
-        pieSeriesData.push({
-            name: "其他（非省份部分）",
-            value: otherPercent,
-            originalVal: otherValue,
-            itemStyle: { color: isDark ? '#c7d2fe' : '#64748b' }
-        });
-    }
     
     const allProvinceSet = new Set(provinceRows.map(r => r["地区"]));
     const neverExist = pieProvinceList.filter(p => !allProvinceSet.has(p));
@@ -3600,75 +4108,112 @@ function renderPieChart() {
     const totalNote = totalSource === "province_sum" ? `（基于${provinceRows.length}省数值总和${formatValue(total)}计算）` : "";
     const unit = getUnit(metric);
     
+    // 用像素坐标精确对齐花心装饰圆与花瓣中心
+    const _cw = pieChart.getWidth();
+    const _ch = pieChart.getHeight();
+    const _cx = _cw * 0.42;
+    const _cy = _ch * 0.54;
+
+    // notMerge=true 清除切换图表类型留下的轴线/grid 残留
     pieChart?.setOption({
         backgroundColor: 'transparent',
-        title: { 
-            text: `${year}年 ${metric}${unit ? `(${unit})` : ''} 各省份占比${totalNote}`, 
-            left: "center", 
-            top: 0,
-            textStyle: { color: isDark ? '#f7fafc' : '#1f2b48', fontSize: 14 }
+        // 明确清空可能残留的轴/grid，消灭左侧和下侧边框线
+        grid: [],
+        xAxis: [],
+        yAxis: [],
+        title: {
+            text: `${year}年  ${metric}${unit ? ` (${unit})` : ''}  各省份占比`,
+            subtext: totalNote || '',
+            left: "42%",
+            textAlign: "center",
+            top: 10,
+            textStyle: { color: isDark ? '#e8f2ff' : '#1f2b48', fontSize: 15, fontWeight: 700 },
+            subtextStyle: { color: isDark ? '#a0bedd' : '#5a7a9a', fontSize: 11 }
         },
         tooltip: {
             trigger: "item",
-            backgroundColor: isDark ? 'rgba(26,31,46,0.95)' : 'rgba(255,255,255,0.95)',
-            borderColor: '#667eea',
-            textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' },
+            confine: true,
+            backgroundColor: isDark ? 'rgba(15,22,40,0.96)' : 'rgba(255,255,255,0.97)',
+            borderColor: isDark ? 'rgba(100,130,200,0.3)' : 'rgba(90,103,216,0.25)',
+            borderWidth: 1,
+            padding: [10, 14],
+            textStyle: { color: isDark ? '#e8f4ff' : '#1a2540', fontSize: 13 },
+            extraCssText: 'border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);',
             formatter: (params) => {
                 if (params.name.startsWith("数据缺失省份")) {
-                    return `${params.name}<br/>缺失名单: ${neverExist.join("、")}`;
+                    return `<b>${params.name}</b><br/><span style="color:#94a3b8">缺失: ${neverExist.join("、")}</span>`;
                 }
-                if (params.name === "其他（非省份部分）") {
-                    return `${params.name}<br/>占比: ${params.percent.toFixed(2)}%<br/>数值: ${formatValue(otherValue)} ${unit}`;
-                }
-                let tip = `${params.name}<br/>占比: ${params.percent.toFixed(2)}%`;
-                if (params.data?.originalVal !== undefined && params.name !== "其他（非省份部分）") {
-                    tip += `<br/>数值: ${formatValue(params.data.originalVal)} ${unit}`;
+                const realPct = params.data?.realPercent ?? params.percent;
+                const colorDot = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${params.color};margin-right:6px;vertical-align:middle;"></span>`;
+                let tip = `${colorDot}<b>${params.name}</b><br/>占比：<b style="color:${params.color}">${realPct.toFixed(2)}%</b>`;
+                if (params.data?.originalVal !== undefined) {
+                    tip += `<br/>数值：${formatValue(params.data.originalVal)}${unit ? ' ' + unit : ''}`;
                 }
                 if (params.name.startsWith("已隐藏省份")) {
-                    tip += `<br/>包含: ${formatMissingList(hiddenNames, 5)}`;
+                    tip += `<br/><span style="color:#94a3b8">含：${formatMissingList(hiddenNames, 5)}</span>`;
                 }
                 return tip;
             }
         },
         legend: {
             orient: "vertical",
-            left: "left",
+            right: 6,
+            top: "middle",
             type: "scroll",
-            textStyle: { color: isDark ? '#dbeafe' : '#263b59' },
-            formatter: (name) => name.length > 20 ? name.slice(0, 18) + "..." : name
+            itemWidth: 10,
+            itemHeight: 10,
+            itemGap: 7,
+            pageIconSize: 10,
+            pageTextStyle: { fontSize: 11, color: isDark ? '#8fa6c8' : '#718096' },
+            textStyle: { color: isDark ? '#cce0ff' : '#263b59', fontSize: 11.5 },
+            formatter: (name) => name.length > 7 ? name.slice(0, 7) + '…' : name
         },
+        graphic: [{
+            type: 'circle',
+            x: _cx,
+            y: _cy,
+            shape: { r: 28 },
+            style: {
+                fill: isDark ? 'rgba(15,22,40,0.7)' : 'rgba(245,248,255,0.85)',
+                stroke: isDark ? 'rgba(90,110,180,0.25)' : 'rgba(90,103,216,0.18)',
+                lineWidth: 1.5,
+                shadowBlur: 12,
+                shadowColor: isDark ? 'rgba(90,103,216,0.3)' : 'rgba(90,103,216,0.15)'
+            }
+        }],
         series: [{
             type: "pie",
-            radius: ["35%", "65%"],
-            center: ["50%", "50%"],
+            roseType: "area",
+            radius: ["8%", "72%"],
+            center: ["42%", "54%"],
             data: pieSeriesData,
-            label: {
-                show: true,
-                formatter: (params) => {
-                    if (params.name.startsWith("数据缺失省份")) return "";
-                    if (params.name === "其他（非省份部分）") return "其他";
-                    if (params.percent < 0.5) return "";
-                    if (params.percent < 2) return `${params.percent.toFixed(2)}%`;
-                    return `${params.name}: ${params.percent.toFixed(2)}%`;
-                },
-                position: "outside",
-                lineHeight: 16,
-                fontSize: 10,
-                color: isDark ? '#dbeafe' : '#263b59',
-                avoidLabelOverlap: true,
-                labelLine: {
-                    show: true,
-                    length: 8,
-                    length2: 6,
-                    smooth: true
-                }
+            label: { show: false },
+            labelLine: { show: false },
+            itemStyle: {
+                borderRadius: 4,
+                borderWidth: 1.5,
+                borderColor: isDark ? 'rgba(10,15,30,0.6)' : 'rgba(255,255,255,0.7)',
+                shadowBlur: 0
             },
-            minAngle: 1,
-            emphasis: { 
+            minAngle: 1.5,
+            emphasis: {
                 scale: true,
+                scaleSize: 8,
+                label: {
+                    show: true,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: isDark ? '#e8f4ff' : '#1a2540',
+                    formatter: (params) => {
+                        const pct = (params.data?.realPercent ?? params.percent).toFixed(1);
+                        return `${params.name}\n${pct}%`;
+                    }
+                },
                 itemStyle: {
                     shadowBlur: 20,
-                    shadowColor: 'rgba(102,126,234,0.5)'
+                    shadowColor: 'rgba(90,103,216,0.5)',
+                    borderWidth: 2,
+                    borderColor: isDark ? 'rgba(150,170,230,0.5)' : 'rgba(90,103,216,0.4)'
                 }
             }
         }]
@@ -3688,10 +4233,9 @@ function renderPieChart() {
         }
     });
     
-    let statusMsg = `💡 总量来源: ${totalSource === "national" ? "全国表" : "省份表数值之和"} | 总值: ${formatValue(total)} ${unit}`;
+    let statusMsg = `💡 总量来源: ${totalSource === "national" ? "全国表" : "省份表数值之和"} | 总值: ${formatValue(total)} ${unit} | * 半径经视觉均衡处理，悬停查看真实占比`;
     if (neverExist.length) statusMsg += ` | 数据缺失省份: ${formatMissingList(neverExist)}`;
     if (hiddenNames.length) statusMsg += ` | 已隐藏 ${hiddenNames.length} 省`;
-    if (otherValue > 0) statusMsg += ` | 非省份部分占比: ${((otherValue/total)*100).toFixed(2)}%`;
     
     const status = document.getElementById("pie-status");
     if (status) status.innerHTML = statusMsg;
@@ -4048,16 +4592,40 @@ function renderCategoryStats(metric, year) {
 // ======================= 表格分页 + 排序 + 搜索 =======================
 
 let currentSearchTerm = "";
+let tableActiveMetricFilter = "";  // 当前选中的指标列筛选
 
 function applyFilterAndSort() {
     let filtered = [...tableRows];
-    const searchVal = document.getElementById("search-input")?.value.trim() || "";
+    const searchVal = (document.getElementById("search-input")?.value || "").trim();
+    const yearVal   = (document.getElementById("table-year-filter")?.value || "").trim();
+    const regionVal = (document.getElementById("table-region-filter")?.value || "").trim().toLowerCase();
+    const metricVal = (document.getElementById("table-metric-filter")?.value || "").trim();
     currentSearchTerm = searchVal;
-    
+    tableActiveMetricFilter = metricVal;
+
+    // 年份精确筛选
+    if (yearVal) {
+        filtered = filtered.filter(r => String(r["年份"] ?? "") === yearVal);
+    }
+    // 地区模糊匹配
+    if (regionVal) {
+        filtered = filtered.filter(r => String(r["地区"] ?? "").toLowerCase().includes(regionVal));
+    }
+    // 指标列有值筛选：只保留该指标不为空/0的行
+    if (metricVal) {
+        filtered = filtered.filter(r => {
+            const v = r[metricVal];
+            return v !== null && v !== undefined && v !== "" && Number(v) !== 0;
+        });
+        // 同步只显示：地区、年份、选中指标列
+        visibleColumns.clear();
+        ["地区","年份",metricVal].forEach(k => { if(tableHeaders.includes(k)) visibleColumns.add(k); });
+    }
+    // 关键词全文搜索（在已过滤结果上继续筛）
     if (searchVal) {
         filtered = filtered.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(searchVal.toLowerCase())));
     }
-    
+
     if (sortKey) {
         filtered.sort((a,b) => {
             let av = a[sortKey], bv = b[sortKey];
@@ -4065,20 +4633,61 @@ function applyFilterAndSort() {
             return sortType === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
         });
     }
-    
+
     filteredRowsForPage = filtered;
     totalRecords = filteredRowsForPage.length;
     totalPages = Math.ceil(totalRecords / pageSize) || 1;
     if (currentPage > totalPages) currentPage = totalPages || 1;
-    
+
     const totalRecordsEl = document.getElementById("total-records");
     const pageTotalEl = document.getElementById("page-total");
     if (totalRecordsEl) totalRecordsEl.innerText = totalRecords;
     if (pageTotalEl) pageTotalEl.innerText = totalPages;
-    
+
     let sortMsg = sortKey ? `当前排序：${sortKey} ${sortType === "asc" ? "↑ 升序" : "↓ 降序"}` : "无";
     const sortStatus = document.getElementById("sort-status");
     if (sortStatus) sortStatus.innerHTML = `${sortMsg}（点击表头排序）`;
+}
+
+// 填充年份和指标下拉，并绑定事件
+function initTableSmartFilters() {
+    const yearSel   = document.getElementById("table-year-filter");
+    const metricSel = document.getElementById("table-metric-filter");
+    const regionIn  = document.getElementById("table-region-filter");
+    const clearBtn  = document.getElementById("table-filter-clear");
+
+    if (yearSel) {
+        const years = [...new Set(tableRows.map(r => String(r["年份"] ?? "")).filter(Boolean))].sort();
+        yearSel.innerHTML = '<option value="">全部年份</option>' + years.map(y => `<option value="${y}">${y}</option>`).join("");
+        yearSel.onchange = () => { currentPage = 1; applyFilterAndSort(); renderTablePage(); };
+    }
+    if (metricSel) {
+        const metrics = tableHeaders.filter(h => h !== "年份" && h !== "地区");
+        metricSel.innerHTML = '<option value="">全部指标</option>' + metrics.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
+        metricSel.onchange = () => {
+            currentPage = 1;
+            // 若取消指标筛选，恢复全部列显示
+            if (!metricSel.value) { tableHeaders.forEach(h => visibleColumns.add(h)); }
+            applyFilterAndSort();
+            renderTablePage();
+        };
+    }
+    if (regionIn) {
+        regionIn.oninput = debounce(() => { currentPage = 1; applyFilterAndSort(); renderTablePage(); }, 200);
+    }
+    if (clearBtn) {
+        clearBtn.onclick = () => {
+            if (yearSel) yearSel.value = "";
+            if (metricSel) metricSel.value = "";
+            if (regionIn) regionIn.value = "";
+            const searchIn = document.getElementById("search-input");
+            if (searchIn) searchIn.value = "";
+            tableHeaders.forEach(h => visibleColumns.add(h));
+            currentPage = 1;
+            applyFilterAndSort();
+            renderTablePage();
+        };
+    }
 }
 
 function renderTablePage() {
@@ -4220,22 +4829,9 @@ function renderTablePage() {
     updateTableDataProcessingNotice(filteredRowsForPage, visible);
 }
 
-function updateTableDataProcessingNotice(rows, headers) {
-    const section = document.getElementById('section-table');
-    const toolbar = section?.querySelector('.table-toolbar');
-    if (!section || !toolbar) return;
-    let notice = section.querySelector('.data-processing-notice.table-data-notice');
-    const shouldShow = hasPotentialMissingValueProcessingFromRows(rows, headers);
-    if (!shouldShow) {
-        notice?.remove();
-        return;
-    }
-    if (!notice) {
-        notice = document.createElement('div');
-        notice.className = 'data-processing-notice table-data-notice';
-        toolbar.insertAdjacentElement('afterend', notice);
-    }
-    notice.innerHTML = '<span>数据提示</span>当前表格中存在较高重复值，可能经过缺失值处理，请结合数据口径谨慎解读。';
+function updateTableDataProcessingNotice() {
+    // 提示已关闭
+    document.querySelector('.data-processing-notice.table-data-notice')?.remove();
 }
 
 function sortTable(key) {
@@ -4472,11 +5068,6 @@ function renderControls(type) {
         btn.onclick = () => loadChart(type);
         container.appendChild(btn);
 
-        const modalBtn = document.createElement('button');
-        modalBtn.innerText = '查看大图';
-        modalBtn.className = 'analysis-run-btn scatter-modal-btn';
-        modalBtn.onclick = () => openScatterChartModal();
-        container.appendChild(modalBtn);
         
         setTimeout(() => {
             const tableEl = document.getElementById('scatter-table');
@@ -4563,10 +5154,8 @@ function normalizeScatterControlText() {
     if (clearAll) clearAll.textContent = '清空地区';
     const selectVisible = document.getElementById('scatter-select-visible');
     if (selectVisible) selectVisible.textContent = '选择搜索结果';
-    const run = document.querySelector('#analysis-controls .analysis-run-btn:not(.scatter-modal-btn)');
+    const run = document.querySelector('#analysis-controls .analysis-run-btn');
     if (run) run.textContent = '生成散点图';
-    const modal = document.querySelector('#analysis-controls .scatter-modal-btn');
-    if (modal) modal.textContent = '查看大图';
     const selected = document.getElementById('scatter-regions');
     const summary = document.getElementById('scatter-selected-summary');
     if (selected && summary) summary.textContent = `已选择 ${selected.selectedOptions.length} 个地区`;
@@ -4596,12 +5185,7 @@ function hasPotentialMissingValueProcessingFromRows(rows, headers) {
     });
 }
 
-function dataProcessingNoticeHtml() {
-    return `<div class="data-processing-notice">
-        <span>数据提示</span>
-        当前结果中存在较高重复值，可能经过缺失值处理，请结合数据口径谨慎解读。
-    </div>`;
-}
+function dataProcessingNoticeHtml() { return ''; }
 
 // ── 查看大图辅助 ──────────────────────────────────────
 function _addViewFullBtn(chartDom, onClick) {
@@ -4785,12 +5369,7 @@ function renderButterflyControls(container) {
     });
 }
 
-function dataProcessingNoticeHtml() {
-    return `<div class="data-processing-notice">
-        <span>数据提示</span>
-        当前结果中存在较高重复值，可能经过缺失值处理，请结合数据口径谨慎解读。
-    </div>`;
-}
+function dataProcessingNoticeHtml() { return ''; }
 
 async function loadChart(type) {
     const chartDom = document.getElementById('analysis-chart');
@@ -5024,10 +5603,10 @@ async function loadChart(type) {
                             shadowColor: 'rgba(99,102,241,.45)'
                         }
                     },
-                    itemStyle: { 
+                    itemStyle: {
                         color: new echarts.graphic.RadialGradient(0.4, 0.3, 1, [
-                            { offset: 0, color: '#667eea' },
-                            { offset: 1, color: '#764ba2' }
+                            { offset: 0, color: '#2563a8' },
+                            { offset: 1, color: '#1a8f8f' }
                         ])
                     }
                 }]
@@ -5043,6 +5622,7 @@ async function loadChart(type) {
             currentChartInstance.setOption(option);
             window._lastScatterOption = option;
             ensureScatterInteractionHint(table);
+            _addViewFullBtn(chartDom, () => _openRawEchartsModal(option, option.title?.text || '散点图'));
             setTimeout(() => currentChartInstance.resize({ height: fitHeight }), 100);
         } catch (e) {
             console.error('散点图加载失败:', e);
@@ -5060,7 +5640,7 @@ function ensureScatterInteractionHint(table) {
     hint.className = 'scatter-interaction-hint';
     hint.textContent = table === 'city'
         ? '地级市点位较密：滚轮缩放、拖动平移，悬停查看城市名称'
-        : '悬停点位查看数据，点击“查看大图”进入沉浸式查看';
+        : '悬停点位查看数据，点击下方”查看大图”进入沉浸式查看';
     chartDom.insertAdjacentElement('afterend', hint);
 }
 
@@ -5571,6 +6151,7 @@ document.addEventListener('click', function(e) {
 function jumpToDataTableFromAgent() {
     closeRagFullscreen();
     setTimeout(() => {
+        toggleTableSection(true); // 自动展开数据明细表
         const table = document.getElementById('section-table');
         if (table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 260);
@@ -5669,12 +6250,10 @@ function agentBuildDocx(data, question) {
     const trace = (data.toolTrace || []).map(t => `${t.normalizedTool || t.tool || 'tool'}: ${JSON.stringify(t.params || {})}`);
     const sections = [
         agentDocxParagraph(title, 'Title'),
-        agentDocxParagraph(`生成时间：${now} · 来源：山东财经大学科研教育人才一体化数据平台 Agent`),
+        agentDocxParagraph(`生成时间：${now}　来源：山东财经大学科研教育人才一体化数据平台`),
         agentDocxParagraph('分析结论', 'Heading1'),
-        agentDocxParagraph(agentPlainText(data.answer || '')),
-        reasoning.length ? agentDocxParagraph('思考摘要', 'Heading1') + reasoning.map(x => agentDocxParagraph(`- ${x}`)).join('') : '',
-        trace.length ? agentDocxParagraph('工具调用', 'Heading1') + trace.map(x => agentDocxParagraph(`- ${x}`)).join('') : '',
-        citations.length ? agentDocxParagraph('数据来源', 'Heading1') + citations.map(x => agentDocxParagraph(`- ${x}`)).join('') : ''
+        agentDocxParagraph(agentPlainText(data.answer || '（无内容）')),
+        citations.length ? agentDocxParagraph('数据来源', 'Heading1') + citations.map(x => agentDocxParagraph(`· ${x}`)).join('') : ''
     ].join('');
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -5766,7 +6345,7 @@ function executeAgentUiActions(data, question, sourceBubble) {
     const actions = [];
     if (hasChart) actions.push({ id: 'inline-chart', label: '展开图表', icon: 'chart' });
     if (hasChart) actions.push({ id: 'chart-modal', label: '大图查看', icon: 'expand' });
-    actions.push({ id: 'open-data-table', label: '查看明细', icon: 'table' });
+    if (data?.data || data?.table) actions.push({ id: 'open-data-table', label: '查看明细', icon: 'table' });
     if (hasChart) actions.push({ id: 'export-inline-chart', label: '导出 PNG', icon: 'download' });
     if (wantsExport) actions.push({ id: 'export-chat-table', label: '导出 CSV', icon: 'download' });
     actions.push({ id: 'report-html', label: '生成报告', icon: 'report' });
@@ -5886,7 +6465,6 @@ function initSdufeLogoBubble() {
 
 waitForWorkbook();
 bindEvents();
-initLandingScrollHint();
 initSdufeCover();
 refineLandingCapabilities();
 refineRagCapabilityBadges();

@@ -21,8 +21,10 @@ let hybridIndex = null;
 let hybridDocuments = [];
 let rawDataCache = { national: [], province: [], city: [] };
 let metricNameList = [];
+let nationalMetricList = [];
+let cityMetricList = [];
 const sessionHistories = new Map();
-const MAX_HISTORY = Math.max(1, parseInt(process.env.MAX_HISTORY || '6', 10));
+const MAX_HISTORY = Math.max(1, parseInt(process.env.MAX_HISTORY || '12', 10));
 const SESSION_TTL_MS = Math.max(1, parseInt(process.env.SESSION_TTL_MINUTES || '30', 10)) * 60 * 1000;
 const MAX_SESSIONS = Math.max(10, parseInt(process.env.MAX_SESSIONS || '500', 10));
 const DISABLE_HISTORY = process.env.DISABLE_HISTORY === 'true';
@@ -37,6 +39,10 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
 const USE_DEEPSEEK_API = !!DEEPSEEK_API_KEY;
+
+// 网络搜索配置（可选，不配置时跳过网搜兜底）
+const TAVILY_API_KEY  = process.env.TAVILY_API_KEY  || '';
+const SERPER_API_KEY  = process.env.SERPER_API_KEY  || '';
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
     .split(',')
@@ -61,6 +67,35 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// ========== 诊断接口 ==========
+app.get('/api/debug/chroma', async (req, res) => {
+    try {
+        if (!collection) return res.json({ error: 'collection 未初始化' });
+        const total = await collection.count();
+        // 查知识文档（metadata.table = knowledge）
+        const knowledgeSample = await collection.get({
+            where: { table: { '$eq': 'knowledge' } },
+            limit: 5,
+            include: ['documents', 'metadatas']
+        });
+        // 关键词测试
+        const kwTest = await collection.get({
+            whereDocument: { '$contains': '德国' },
+            limit: 3,
+            include: ['documents', 'metadatas']
+        }).catch(e => ({ error: e.message }));
+        res.json({
+            total,
+            knowledgeDocCount: knowledgeSample.documents?.length ?? 0,
+            knowledgeSample: knowledgeSample.documents?.slice(0, 2).map(d => String(d).slice(0, 200)) ?? [],
+            germanyKeywordHits: kwTest.error ? kwTest : kwTest.documents?.length,
+            germanySample: kwTest.documents?.slice(0, 1).map(d => String(d).slice(0, 300)) ?? []
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ========== 数据接口 ==========
 app.get('/api/data', async (req, res) => {
     try {
@@ -72,6 +107,55 @@ app.get('/api/data', async (req, res) => {
         res.status(500).json({ error: '读取数据文件失败' });
     }
 });
+
+// ========== 常量 ==========
+// 省份简称→全称（全局共享，避免在 extractEntities / llmExtractEntities 各自维护）
+const REGION_MAP = {
+    '广东': '广东省', '江苏': '江苏省', '浙江': '浙江省', '山东': '山东省',
+    '北京': '北京市', '上海': '上海市', '天津': '天津市', '重庆': '重庆市',
+    '安徽': '安徽省', '福建': '福建省', '江西': '江西省', '河南': '河南省',
+    '湖北': '湖北省', '湖南': '湖南省', '四川': '四川省', '贵州': '贵州省',
+    '云南': '云南省', '陕西': '陕西省', '甘肃': '甘肃省', '海南': '海南省',
+    '辽宁': '辽宁省', '吉林': '吉林省', '黑龙江': '黑龙江省', '河北': '河北省',
+    '山西': '山西省', '内蒙古': '内蒙古自治区', '广西': '广西壮族自治区',
+    '西藏': '西藏自治区', '新疆': '新疆维吾尔自治区', '宁夏': '宁夏回族自治区',
+    '青海': '青海省'
+};
+
+// 关键词→指标 同义词组（全局共享，getRelevantMetrics / inferMetric / expandQueryForRetrieval 均引用此表）
+const METRIC_SYNONYMS = [
+    // 人才称号类
+    { keys: ['长江学者', '长江'],               metrics: ['长江学者'] },
+    { keys: ['杰青', '杰出青年'],               metrics: ['杰青'] },
+    { keys: ['优青', '优秀青年'],               metrics: ['优青'] },
+    { keys: ['万人领军', '万人计划', '领军人才'], metrics: ['万人领军'] },
+    { keys: ['万人青拔', '青年拔尖'],            metrics: ['万人青拔'] },
+    { keys: ['博士后', '博创'],                 metrics: ['博士后创新人才支持计划'] },
+    { keys: ['科协托举', '青年人才托举'],         metrics: ['中国科协青年人才托举工程'] },
+    { keys: ['国家工程师'],                     metrics: ['国家卓越工程师奖'] },
+    // 科技创新类
+    { keys: ['人工智能', '智能化', 'AI', 'ai'],  metrics: ['人工智能应用水平', '工业机器人密度'] },
+    { keys: ['机器人', '工业机器人'],             metrics: ['工业机器人密度'] },
+    { keys: ['专利', '发明专利', '知识产权'],     metrics: ['发明专利授予数', '实用新型专利申请授权数'] },
+    { keys: ['科研投入', '研发投入', 'R&D', '研发经费'], metrics: ['科研经费投入强度', '科学支出水平'] },
+    { keys: ['科技人员', '研发人员', 'R&D人员'],  metrics: ['科技人员投入强度', 'R&D人员/年末从业人员数'] },
+    { keys: ['技术市场', '成果转化'],             metrics: ['技术市场活跃度', '技术市场交易额/万元'] },
+    // 教育类
+    { keys: ['高校', '大学', '高等教育', '教育水平', '教育'], metrics: ['普通高校数量', '万人大学生数', '人均受教育年限', '教育支出水平', '生均教育经费支出'] },
+    { keys: ['受教育', '教育年限'],               metrics: ['人均受教育年限'] },
+    { keys: ['教育支出', '教育经费'],             metrics: ['教育支出水平', '生均教育经费支出'] },
+    { keys: ['中小学', '基础教育'],              metrics: ['中小学学校数量'] },
+    // 数字化类
+    { keys: ['互联网', '网络普及', '数字化'],     metrics: ['互联网普及度', '电信业务总量', '信息传输计算机软件业从业人员数/年末从业人员数'] },
+    { keys: ['信息技术', 'IT', '软件'],          metrics: ['信息技术人才', '信息传输计算机软件业从业人员数/年末从业人员数'] },
+    // 人力资本类
+    { keys: ['人力资本', '人才密度', '人才水平', '人才'], metrics: ['人力资本水平', '人才人口密度', '高级职称人才占人口比例', '长江学者', '杰青', '优青', '万人领军'] },
+    { keys: ['高级职称', '职称'],                metrics: ['高级职称人才占人口比例'] },
+    { keys: ['产业结构', '产业升级', '产业'],     metrics: ['产业结构高级化', '产业结构指数', '全员劳动生产率', '新产品销售收入'] },
+    // 科研产出类
+    { keys: ['论文', '发表论文', '科技论文'],     metrics: ['普通高校发表论文数', '人才平均科技论文'] },
+    { keys: ['科研成果', '成果', '科研'],         metrics: ['人才平均科技成果', '科研经费利用效果', '科研经费投入强度', '科技人员投入强度', 'R&D人员/年末从业人员数', '普通高校发表论文数'] },
+];
 
 // ========== 辅助函数 ==========
 function cleanMetricName(key) {
@@ -292,15 +376,68 @@ async function generateFast(prompt, timeoutMs = 15000) {
     }
 }
 
+// ── Embedding LRU 缓存（最多 200 条，避免同一查询重复调 Ollama）─────
+const embeddingCache = new Map();
+const EMBEDDING_CACHE_MAX = 200;
+
 async function getEmbedding(text) {
+    const prompt = String(text || '').slice(0, 4000);
+    if (embeddingCache.has(prompt)) {
+        // 刷新 LRU 顺序
+        const cached = embeddingCache.get(prompt);
+        embeddingCache.delete(prompt);
+        embeddingCache.set(prompt, cached);
+        return cached;
+    }
     const response = await axios.post(`${OLLAMA_URL}/api/embeddings`, {
         model: OLLAMA_EMBED_MODEL,
-        prompt: String(text || '').slice(0, 4000)
+        prompt
     }, { timeout: OLLAMA_TIMEOUT_MS });
     if (!Array.isArray(response.data?.embedding)) {
         throw new Error('Ollama embedding 返回为空');
     }
-    return response.data.embedding;
+    const embedding = response.data.embedding;
+    if (embeddingCache.size >= EMBEDDING_CACHE_MAX) {
+        embeddingCache.delete(embeddingCache.keys().next().value);
+    }
+    embeddingCache.set(prompt, embedding);
+    return embedding;
+}
+
+// ── MMR：最大边际相关性去重 ──────────────────────────────────────
+// 在保证相关度的同时降低 chunk 间冗余，让 LLM 看到更多样化的证据
+function textSimilarity(a, b) {
+    const bigrams = s => {
+        const clean = String(s || '').slice(0, 300);
+        const set = new Set();
+        for (let i = 0; i < clean.length - 1; i++) set.add(clean.slice(i, i + 2));
+        return set;
+    };
+    const ba = bigrams(a), bb = bigrams(b);
+    if (!ba.size && !bb.size) return 1;
+    let inter = 0;
+    for (const g of ba) if (bb.has(g)) inter++;
+    return inter / (ba.size + bb.size - inter);
+}
+
+function applyMMR(docs, lambda = 0.7, topK = 8) {
+    if (docs.length <= topK) return docs;
+    const remaining = [...docs];
+    const selected = [];
+    while (selected.length < topK && remaining.length > 0) {
+        let bestScore = -Infinity, bestIdx = 0;
+        for (let i = 0; i < remaining.length; i++) {
+            const relevance = 1 - Math.min(1, remaining[i].distance ?? 0.5);
+            const maxSim = selected.length
+                ? Math.max(...selected.map(s => textSimilarity(remaining[i].text, s.text)))
+                : 0;
+            const score = lambda * relevance - (1 - lambda) * maxSim;
+            if (score > bestScore) { bestScore = score; bestIdx = i; }
+        }
+        selected.push(remaining[bestIdx]);
+        remaining.splice(bestIdx, 1);
+    }
+    return selected;
 }
 
 function normalizeText(text = '') {
@@ -342,7 +479,14 @@ async function loadDataCache() {
     const fullData = JSON.parse(rawData);
     rawDataCache.national = fullData['全国'] || [];
     rawDataCache.province = fullData['省份'] || [];
-    rawDataCache.city = fullData['地级市'] || [];
+    // 地级市用"时间"字段，统一重命名为"年份"，与其他表保持一致
+    rawDataCache.city = (fullData['地级市'] || []).map(row => {
+        if ('时间' in row && !('年份' in row)) {
+            const { 时间, 时间地区, ...rest } = row;
+            return { 年份: 时间, ...rest };
+        }
+        return row;
+    });
     const sampleRow = rawDataCache.province[0];
     if (sampleRow) {
         metricNameList = Object.keys(sampleRow).filter(key => {
@@ -350,6 +494,14 @@ async function loadDataCache() {
             return typeof sampleRow[key] === 'number';
         });
         console.log(`📊 共加载 ${metricNameList.length} 个指标：${metricNameList.slice(0,5).join('、')}...`);
+    }
+    const nationalSample = rawDataCache.national[0];
+    if (nationalSample) {
+        nationalMetricList = Object.keys(nationalSample).filter(k => k !== '年份' && k !== '地区' && typeof nationalSample[k] === 'number');
+    }
+    const citySample = rawDataCache.city[0];
+    if (citySample) {
+        cityMetricList = Object.keys(citySample).filter(k => k !== '年份' && k !== '地区' && typeof citySample[k] === 'number');
     }
     console.log(`📊 数据缓存完成`);
 }
@@ -366,14 +518,11 @@ function getRelevantMetrics(question = '', entities = {}) {
     const q = String(question);
     const preferred = [];
     if (entities.metrics?.[0]) preferred.push(entities.metrics[0]);
-    if (/(教育|高校|大学|人才|受教育)/.test(q)) {
-        preferred.push('普通高校数量', '人均受教育年限', '教育支出水平', '万人大学生数', '普通高校专任教师数与在校学生数之比');
-    }
-    if (/(人工智能|AI|智能化|机器人|数字化)/i.test(q)) {
-        preferred.push('人工智能应用水平', '工业机器人密度', '互联网普及度', '信息传输计算机软件业从业人员数/年末从业人员数');
-    }
-    if (/(创新|专利|研发|科研|R&D)/i.test(q)) {
-        preferred.push('发明专利授予数', '实用新型专利申请授权数', '科学支出水平', 'R&D人员/年末从业人员数');
+    // 从 METRIC_SYNONYMS 收集命中的指标（统一维护，无需三处各自硬编码）
+    for (const group of METRIC_SYNONYMS) {
+        if (group.keys.some(k => q.toLowerCase().includes(k.toLowerCase()))) {
+            preferred.push(...group.metrics);
+        }
     }
     const resolved = [];
     for (const name of preferred) {
@@ -404,33 +553,51 @@ function isPartialMetricDetailQuestion(question = '', entities = {}) {
         || /(部分指标|指定指标|这些指标|这几个指标|几个指标|以下指标|若干指标|部分数据)/.test(q);
 }
 
+// ── 模糊指标匹配评分（覆盖全部指标，不依赖手写 alias）────────────
+function fuzzyMatchMetric(query, metric) {
+    const q = String(query).toLowerCase();
+    const m = cleanMetricName(metric).toLowerCase();
+    const mFull = metric.toLowerCase();
+    if (q.includes(mFull) || q.includes(m)) return 1.0;          // 完全命中
+    // 分词交集评分
+    const qTokens = q.match(/[一-龥a-z0-9]+/g) || [];
+    const mTokens = m.match(/[一-龥a-z0-9]+/g) || [];
+    if (!qTokens.length || !mTokens.length) return 0;
+    // 子串命中得高分
+    let score = 0;
+    for (const mt of mTokens) {
+        if (mt.length < 2) continue;
+        if (q.includes(mt)) score += mt.length * 2;
+        else for (const qt of qTokens) {
+            if (qt.length >= 2 && (mt.includes(qt) || qt.includes(mt))) score += Math.min(mt.length, qt.length);
+        }
+    }
+    return score / (m.length + 1);
+}
+
+function findFuzzyMetrics(question, threshold = 0.6) {
+    if (!metricNameList.length) return [];
+    return metricNameList
+        .map(m => ({ metric: m, score: fuzzyMatchMetric(question, m) }))
+        .filter(x => x.score >= threshold)
+        .sort((a, b) => b.score - a.score)
+        .map(x => x.metric);
+}
+
 function getMentionedMetricNames(question = '', entities = {}) {
     const q = String(question);
     const candidates = [...(entities.metrics || [])];
-    const aliasGroups = [
-        { keys: ['工业机器人密度', '工业机器人', '机器人密度', '机器人'], metric: '工业机器人密度' },
-        { keys: ['科学支出水平', '科学支出', '科技支出'], metric: '科学支出水平' },
-        { keys: ['人工智能应用水平', '人工智能应用', 'AI应用', 'ai应用'], metric: '人工智能应用水平' },
-        { keys: ['普通高校数量', '高校数量', '大学数量', '高校数'], metric: '普通高校数量' },
-        { keys: ['教育支出水平', '教育支出'], metric: '教育支出水平' },
-        { keys: ['人均受教育年限', '受教育年限'], metric: '人均受教育年限' },
-        { keys: ['互联网普及度', '互联网普及', '网络普及'], metric: '互联网普及度' },
-        { keys: ['发明专利授予数', '发明专利', '专利授予'], metric: '发明专利授予数' },
-        { keys: ['实用新型专利申请授权数', '实用新型专利', '专利申请授权'], metric: '实用新型专利申请授权数' },
-        { keys: ['公共图书馆个数', '图书馆个数', '图书馆数量'], metric: '公共图书馆个数' },
-        { keys: ['每百人公共图书馆藏书', '图书馆藏书', '藏书'], metric: '每百人公共图书馆藏书' },
-        { keys: ['产业结构高级化', '产业结构'], metric: '产业结构高级化' },
-        { keys: ['万人大学生数', '大学生数'], metric: '万人大学生数' },
-        { keys: ['人才引入强度', '人才引入'], metric: '人才引入强度' },
-        { keys: ['R&D人员', '研发人员'], metric: 'R&D人员/年末从业人员数' }
-    ];
 
-    for (const group of aliasGroups) {
-        if (group.keys.some(key => q.includes(key))) candidates.push(group.metric);
-    }
+    // 精确匹配（保留高置信度路径）
     for (const metric of metricNameList) {
         const clean = cleanMetricName(metric);
         if (q.includes(metric) || q.includes(clean)) candidates.push(metric);
+    }
+
+    // 模糊匹配补全（score ≥ 0.8 才加入，避免误匹配）
+    if (!candidates.length) {
+        const fuzzy = findFuzzyMetrics(q, 0.8);
+        candidates.push(...fuzzy.slice(0, 3));
     }
 
     const resolved = [];
@@ -445,6 +612,81 @@ function getMentionedMetricNames(question = '', entities = {}) {
         if (real && !resolved.includes(real)) resolved.push(real);
     }
     return resolved;
+}
+
+// ── 元数据查询：指标数量 / 指标列表 ──────────────────────────
+function answerMetaQuery(question, recentHistory = []) {
+    const q = question.trim();
+
+    // 检测上一轮是否是指标数量/列表回答（用于追问识别）
+    const lastAssistant = [...recentHistory].reverse().find(h => h.role === 'assistant');
+    const lastWasMeta = lastAssistant && /指标数|省份表.*最丰富|三张表/.test(String(lastAssistant.content || ''));
+
+    // 追问"谁最多/哪个最多/最多的"时，若上一轮是元数据回答，直接答
+    if (lastWasMeta && /谁最多|哪个最多|哪张.*最多|最多.*哪|哪个多/.test(q)) {
+        const counts = [
+            { name: '全国表', count: nationalMetricList.length },
+            { name: '省份表', count: metricNameList.length },
+            { name: '地级市表', count: cityMetricList.length }
+        ].sort((a, b) => b.count - a.count);
+        const top = counts[0];
+        return {
+            answer: `**${top.name}**指标最多，共 **${top.count} 个**。\n\n三张表完整对比：${counts.map(c => `${c.name} ${c.count} 个`).join('、')}。`,
+            citations: [], reasoning: ['追问元数据：哪张表指标最多']
+        };
+    }
+
+    // 匹配"有多少指标""指标多少""有哪些指标""包含哪些指标"类问题
+    if (!/(指标|维度|字段).*(多少|几个|哪些|列表|有什么|什么指标)|(多少|几个).*(指标|维度|字段)/.test(q)) return null;
+
+    const provCount = metricNameList.length;
+    const natCount = nationalMetricList.length;
+    const cityCount = cityMetricList.length;
+
+    const asksNational = /(全国|国家|national)/i.test(q);
+    const asksCity = /(地级市|城市|市级|city)/i.test(q);
+    const asksProv = /(省|省级|province)/i.test(q);
+    const wantsList = /(哪些|列表|有什么|什么指标)/.test(q);
+
+    // 列出全部指标
+    const provList = metricNameList.map(cleanMetricName).join('、');
+    const natList = nationalMetricList.map(cleanMetricName).join('、');
+    const cityList = cityMetricList.map(cleanMetricName).join('、');
+
+    // 只问某一张表
+    if (asksNational && !asksProv && !asksCity) {
+        let ans = `**全国表** 共有 **${natCount} 个指标**。`;
+        if (wantsList && natCount > 0) ans += `\n\n${natList}`;
+        return { answer: ans, citations: [], reasoning: ['元数据查询：全国表指标列表'] };
+    }
+    if (asksCity && !asksProv && !asksNational) {
+        let ans = `**地级市表** 共有 **${cityCount} 个指标**。`;
+        if (wantsList && cityCount > 0) ans += `\n\n${cityList}`;
+        return { answer: ans, citations: [], reasoning: ['元数据查询：地级市表指标列表'] };
+    }
+
+    // 问全部或省级
+    // 动态找出指标最多的表
+    const tableRanked = [
+        { name: '省份表', count: provCount },
+        { name: '全国表', count: natCount },
+        { name: '地级市表', count: cityCount }
+    ].sort((a, b) => b.count - a.count);
+    const richest = tableRanked[0].name;
+
+    const provLabel = richest === '省份表' ? '省份表（最多）' : '省份表';
+    const natLabel  = richest === '全国表'  ? '全国表（最多）'  : '全国表';
+    const cityLabel = richest === '地级市表' ? '地级市表（最多）' : '地级市表';
+
+    let ans = `平台数据集共包含三张表，指标数量如下：\n\n| 数据表 | 指标数 |\n|---|---:|\n| ${provLabel} | **${provCount}** |\n| ${natLabel} | **${natCount}** |\n| ${cityLabel} | **${cityCount}** |\n`;
+    if (wantsList) {
+        if (provCount > 0) ans += `\n**省份表指标：** ${provList}`;
+        if (natCount > 0) ans += `\n\n**全国表指标：** ${natList}`;
+        if (cityCount > 0) ans += `\n\n**地级市表指标：** ${cityList}`;
+    } else {
+        ans += `\n**${richest}**指标最多（${tableRanked[0].count} 个），可用于趋势、排名、对比分析；如需查看完整列表，可以问"${richest}有哪些指标"。`;
+    }
+    return { answer: ans, citations: [], reasoning: ['元数据查询：三表指标数量概览'] };
 }
 
 function answerAllMetricDetails(question, entities = null) {
@@ -641,16 +883,27 @@ function getRanking(metric, year, order = 'desc', topN = 10, table = 'province')
                : table === 'city' ? rawDataCache.city
                : rawDataCache.province;
     if (!rows.length) return [];
-    if (!year) year = getLatestYear(rows);
+    const latestYear = getLatestYear(rows);
+    if (!year) year = latestYear;
     const realKey = findRealKey(rows, metric);
-    if (!realKey) { console.warn(`getRanking: 找不到字段 "${metric}"`); return []; }
-    console.log(`getRanking: "${metric}" → "${realKey}", year=${year}`);
-    const yearData = rows.filter(r => r['年份'] === year);
+    if (!realKey) {
+        console.warn(`getRanking: 找不到字段 "${metric}"`);
+        return [];   // 真正的字段缺失
+    }
+    // 若请求年份无数据，自动降级到最新有效年份
+    let yearData = rows.filter(r => r['年份'] === year);
+    const usedYear = yearData.length ? year : latestYear;
+    if (!yearData.length) {
+        yearData = rows.filter(r => r['年份'] === latestYear);
+        console.warn(`getRanking: ${year}年无数据，自动降级到${latestYear}年`);
+    }
     const valid = yearData
-        .map(r => ({ region: r['地区'] || '全国', value: r[realKey] }))
+        .map(r => ({ region: r['地区'] || '全国', value: r[realKey], _year: usedYear }))
         .filter(item => typeof item.value === 'number' && !isNaN(item.value));
     valid.sort((a, b) => order === 'desc' ? b.value - a.value : a.value - b.value);
-    return valid.slice(0, topN);
+    const result = valid.slice(0, topN);
+    if (usedYear !== year) result._yearFallback = `${year}年无数据，已展示${usedYear}年`;
+    return result;
 }
 
 function getHistoricalData(metric, region, yearsBack = 10) {
@@ -846,20 +1099,9 @@ function extractEntities(question) {
             }
         }
     }
-    const regionMap = {
-        '广东': '广东省', '江苏': '江苏省', '浙江': '浙江省', '山东': '山东省',
-        '北京': '北京市', '上海': '上海市', '天津': '天津市', '重庆': '重庆市',
-        '安徽': '安徽省', '福建': '福建省', '江西': '江西省', '河南': '河南省',
-        '湖北': '湖北省', '湖南': '湖南省', '四川': '四川省', '贵州': '贵州省',
-        '云南': '云南省', '陕西': '陕西省', '甘肃': '甘肃省', '海南': '海南省',
-        '辽宁': '辽宁省', '吉林': '吉林省', '黑龙江': '黑龙江省', '河北': '河北省',
-        '山西': '山西省', '内蒙古': '内蒙古自治区', '广西': '广西壮族自治区',
-        '西藏': '西藏自治区', '新疆': '新疆维吾尔自治区', '宁夏': '宁夏回族自治区',
-        '青海': '青海省'
-    };
     const provinceList = [...new Set(rawDataCache.province.map(r => r['地区']))];
     for (const p of provinceList) { if (question.includes(p)) entities.regions.push(p); }
-    for (const [short, full] of Object.entries(regionMap)) {
+    for (const [short, full] of Object.entries(REGION_MAP)) {
         if (question.includes(short) && !entities.regions.includes(full)) entities.regions.push(full);
     }
     for (const m of metricNameList) {
@@ -917,24 +1159,13 @@ ${historyHint || '无'}
         const parsed = safeParseJSON(raw);
         if (!parsed || typeof parsed !== 'object') return null;
 
-        const regionMap = {
-            '广东': '广东省', '江苏': '江苏省', '浙江': '浙江省', '山东': '山东省',
-            '北京': '北京市', '上海': '上海市', '天津': '天津市', '重庆': '重庆市',
-            '安徽': '安徽省', '福建': '福建省', '江西': '江西省', '河南': '河南省',
-            '湖北': '湖北省', '湖南': '湖南省', '四川': '四川省', '贵州': '贵州省',
-            '云南': '云南省', '陕西': '陕西省', '甘肃': '甘肃省', '海南': '海南省',
-            '辽宁': '辽宁省', '吉林': '吉林省', '黑龙江': '黑龙江省', '河北': '河北省',
-            '山西': '山西省', '内蒙古': '内蒙古自治区', '广西': '广西壮族自治区',
-            '西藏': '西藏自治区', '新疆': '新疆维吾尔自治区', '宁夏': '宁夏回族自治区',
-            '青海': '青海省'
-        };
         const provinceList = [...new Set(rawDataCache.province.map(r => r['地区']))];
 
         const normalizedRegions = (parsed.regions || []).map(r => {
             if (r === '全国') return '全国';
             if (provinceList.includes(r)) return r;
-            if (regionMap[r]) return regionMap[r];
-            for (const [short, full] of Object.entries(regionMap)) {
+            if (REGION_MAP[r]) return REGION_MAP[r];
+            for (const [short, full] of Object.entries(REGION_MAP)) {
                 if (r.includes(short)) return full;
             }
             return r;
@@ -967,7 +1198,41 @@ ${historyHint || '无'}
 }
 
 // LLM 优先，regex 兜底的异步版本（供 runAgent 调用）
-async function extractEntitiesAsync(question, recentHistory = []) {
+// cachedDecision: llmDecideAction 已返回的决策对象（含 entities 字段），可直接复用跳过 LLM 调用
+async function extractEntitiesAsync(question, recentHistory = [], cachedDecision = null) {
+    // ── 优先从 llmDecideAction 的决策结果中复用 entities，省掉一次 LLM 调用 ──
+    if (cachedDecision?.entities) {
+        const ce = cachedDecision.entities;
+        const provinceList = [...new Set(rawDataCache.province.map(r => r['地区']))];
+        const regions = (ce.regions || []).map(r => {
+            if (r === '全国') return '全国';
+            if (provinceList.includes(r)) return r;
+            if (REGION_MAP[r]) return REGION_MAP[r];
+            for (const [short, full] of Object.entries(REGION_MAP)) {
+                if (r.includes(short)) return full;
+            }
+            return r;
+        }).filter(Boolean);
+        const metrics = (ce.metrics || []).map(m => {
+            const cleanM = cleanMetricName(m);
+            return metricNameList.find(ml => ml === m || cleanMetricName(ml) === cleanM ||
+                cleanMetricName(ml).includes(cleanM) || cleanM.includes(cleanMetricName(ml))) || null;
+        }).filter(Boolean);
+        const years = (ce.years || []).map(y => parseInt(y)).filter(y => Number.isFinite(y) && y >= 1990 && y <= 2100);
+        // 补充 regions（多地区场景：decision.regions 可能比 entities.regions 更全）
+        const decisionRegions = (cachedDecision.regions || []).map(r => REGION_MAP[r] || r);
+        const mergedRegions = [...new Set([...regions, ...decisionRegions])].filter(Boolean);
+        // 补全缺失指标：先推断当前问题，断链时从 history 回溯
+        if (!metrics.length) {
+            const inferred = inferMetric(question) || inferMetricFromHistory(recentHistory);
+            if (inferred) metrics.push(inferred);
+        }
+        const yearRange = parseYearRange(question);
+        const mergedYears = yearRange && yearRange.length > years.length ? yearRange : years;
+        console.log('♻️  复用 llmDecideAction entities:', JSON.stringify({ regions: mergedRegions, metrics, years: mergedYears }));
+        return { regions: mergedRegions, metrics, years: mergedYears, intent_hint: cachedDecision.tool || null };
+    }
+
     const llmResult = await llmExtractEntities(question, recentHistory);
     if (llmResult && (llmResult.regions.length || llmResult.metrics.length || llmResult.years.length)) {
         const yearRange = parseYearRange(question);
@@ -985,15 +1250,28 @@ async function extractEntitiesAsync(question, recentHistory = []) {
     return extractEntities(question);
 }
 
-// 对话历史摘要压缩：当历史过长时压缩旧内容，避免 context 超限
-async function compressHistoryIfNeeded(history, maxTokenEstimate = 2000) {
-    if (!history || history.length <= 4) return history;
+// 对话历史摘要压缩：保留关键轮次（含指标/地区），压缩其余旧内容
+async function compressHistoryIfNeeded(history, maxTokenEstimate = 10000) {
+    if (!history || history.length <= 8) return history;
     const totalChars = history.reduce((sum, h) => sum + String(h.content || '').length, 0);
     const estimatedTokens = Math.ceil(totalChars / 1.5);
     if (estimatedTokens <= maxTokenEstimate) return history;
 
-    const toCompress = history.slice(0, Math.floor(history.length / 2));
-    const toKeep = history.slice(Math.floor(history.length / 2));
+    // 标记"关键轮次"：包含指标或地区的 user 消息
+    const isKeyRound = (h) => h.role === 'user' && (
+        metricNameList.some(m => String(h.content).includes(cleanMetricName(m))) ||
+        /省|市|全国|地区|指标/.test(String(h.content))
+    );
+
+    // 把历史分为"旧的可压缩"和"新的保留"两段
+    const half = Math.floor(history.length / 2);
+    const oldPart = history.slice(0, half);
+    const newPart = history.slice(half);
+
+    // 旧的部分：关键轮次直接保留，其余压缩
+    const pinned = oldPart.filter(isKeyRound);
+    const toCompress = oldPart.filter(h => !isKeyRound(h));
+    const toKeep = [...pinned.slice(-4), ...newPart]; // 至多保留4条旧关键轮
     const histText = toCompress
         .map(h => `${h.role === 'user' ? '用户' : '助手'}: ${String(h.content || '').slice(0, 300)}`)
         .join('\n');
@@ -1020,41 +1298,9 @@ ${histText}
 }
 
 function inferMetric(text) {
-    const synonymGroups = [
-        // 人才称号类（新增）
-        { keys: ['长江学者', '长江'], metrics: ['长江学者'] },
-        { keys: ['杰青', '杰出青年'], metrics: ['杰青'] },
-        { keys: ['优青', '优秀青年'], metrics: ['优青'] },
-        { keys: ['万人领军', '万人计划', '领军人才'], metrics: ['万人领军'] },
-        { keys: ['万人青拔', '青年拔尖'], metrics: ['万人青拔'] },
-        { keys: ['博士后', '博创'], metrics: ['博士后创新人才支持计划'] },
-        { keys: ['科协托举', '青年人才托举'], metrics: ['中国科协青年人才托举工程'] },
-        { keys: ['国家工程师'], metrics: ['国家卓越工程师奖'] },
-        // 科技创新类
-        { keys: ['人工智能', '智能化', 'AI', 'ai'], metrics: ['人工智能应用水平', '工业机器人密度'] },
-        { keys: ['机器人', '工业机器人'], metrics: ['工业机器人密度'] },
-        { keys: ['专利', '发明专利', '知识产权'], metrics: ['发明专利授予数', '实用新型专利申请授权数'] },
-        { keys: ['科研投入', '研发投入', 'R&D', '研发经费'], metrics: ['科研经费投入强度', '科学支出水平'] },
-        { keys: ['科技人员', '研发人员', 'R&D人员'], metrics: ['科技人员投入强度', 'R&D人员/年末从业人员数'] },
-        { keys: ['技术市场', '成果转化'], metrics: ['技术市场活跃度', '技术市场交易额/万元'] },
-        // 教育类
-        { keys: ['高校', '大学', '高等教育', '教育水平'], metrics: ['普通高校数量', '万人大学生数'] },
-        { keys: ['受教育', '教育年限'], metrics: ['人均受教育年限'] },
-        { keys: ['教育支出', '教育经费'], metrics: ['教育支出水平', '生均教育经费支出'] },
-        { keys: ['中小学', '基础教育'], metrics: ['中小学学校数量'] },
-        // 数字化类
-        { keys: ['互联网', '网络普及', '数字化'], metrics: ['互联网普及度', '电信业务总量'] },
-        { keys: ['信息技术', 'IT', '软件'], metrics: ['信息技术人才', '信息传输计算机软件业从业人员数/年末从业人员数'] },
-        // 人力资本类
-        { keys: ['人力资本', '人才密度', '人才水平'], metrics: ['人力资本水平', '人才人口密度'] },
-        { keys: ['高级职称', '职称'], metrics: ['高级职称人才占人口比例'] },
-        { keys: ['产业结构', '产业升级'], metrics: ['产业结构高级化', '产业结构指数'] },
-        // 科研产出类
-        { keys: ['论文', '发表论文', '科技论文'], metrics: ['普通高校发表论文数', '人才平均科技论文'] },
-        { keys: ['科研成果', '成果'], metrics: ['人才平均科技成果', '科研经费利用效果'] },
-    ];
-    for (const group of synonymGroups) {
-        if (group.keys.some(k => text.includes(k))) {
+    // 引用模块级 METRIC_SYNONYMS，无需在此维护重复的同义词组
+    for (const group of METRIC_SYNONYMS) {
+        if (group.keys.some(k => text.toLowerCase().includes(k.toLowerCase()))) {
             for (const name of group.metrics) {
                 const matched = metricNameList.find(m =>
                     m === name || cleanMetricName(m) === cleanMetricName(name) ||
@@ -1064,7 +1310,36 @@ function inferMetric(text) {
             }
         }
     }
+    // 精确 synonym 没命中，用模糊匹配兜底
+    const fuzzy = findFuzzyMetrics(text, 0.7);
+    if (fuzzy.length) return fuzzy[0];
     return metricNameList[0] || '科学支出水平';
+}
+
+/**
+ * 从最近对话历史中回溯最后一个明确指标
+ * 用于 lastMethod 断链时（如方法追问后、跨轮）保持指标继承
+ */
+function inferMetricFromHistory(recentHistory = []) {
+    if (!Array.isArray(recentHistory)) return null;
+    // 从最新到最旧扫描 assistant 消息的 meta，找有 metric 的那一条
+    for (let i = recentHistory.length - 1; i >= 0; i--) {
+        const h = recentHistory[i];
+        const metricFromMeta = h?.meta?.methodSummary?.params?.metric
+            || h?.meta?.toolTrace?.[0]?.params?.metric;
+        if (metricFromMeta) return metricFromMeta;
+        // 扫描 user 消息里能推断出的指标
+        if (h?.role === 'user') {
+            const m = inferMetric(String(h.content || ''));
+            // inferMetric 有兜底会返回 metricNameList[0]，需区分"真命中"和"兜底"
+            const text = String(h.content || '').toLowerCase();
+            const isTrueHit = metricNameList.some(name =>
+                text.includes(cleanMetricName(name).toLowerCase()) || text.includes(name.toLowerCase())
+            );
+            if (isTrueHit && m) return m;
+        }
+    }
+    return null;
 }
 
 function expandQueryForRetrieval(question, entities = {}) {
@@ -1073,17 +1348,12 @@ function expandQueryForRetrieval(question, entities = {}) {
     if (metric) additions.push(metric, cleanMetricName(metric));
     for (const r of entities.regions || []) additions.push(r);
     for (const y of entities.years || []) additions.push(String(y));
-    const synonymHints = [
-        ['教育',     '普通高校数量 人均受教育年限 教育支出水平 万人大学生数 中小学学校数量 生均教育经费支出'],
-        ['人工智能', '人工智能应用水平 工业机器人密度 互联网普及度 信息技术人才'],
-        ['创新',     '发明专利授予数 实用新型专利申请授权数 科研经费投入强度 技术市场活跃度'],
-        ['数字化',   '互联网普及度 电信业务总量 信息传输计算机软件业从业人员数/年末从业人员数'],
-        ['科研',     '科研经费投入强度 科技人员投入强度 R&D人员/年末从业人员数 普通高校发表论文数'],
-        ['人才',     '人力资本水平 人才人口密度 高级职称人才占人口比例 长江学者 杰青 优青 万人领军'],
-        ['产业',     '产业结构高级化 产业结构指数 全员劳动生产率 新产品销售收入'],
-    ];
-    for (const [key, value] of synonymHints) {
-        if (String(question).includes(key)) additions.push(value);
+    // 引用 METRIC_SYNONYMS，无需维护重复的 synonymHints 数组
+    const q = String(question);
+    for (const group of METRIC_SYNONYMS) {
+        if (group.keys.some(k => q.toLowerCase().includes(k.toLowerCase()))) {
+            additions.push(...group.metrics);
+        }
     }
     return `${question} ${additions.join(' ')}`;
 }
@@ -1161,52 +1431,133 @@ function retrieveHybridEvidence(question, entities = {}, limit = 8) {
     return rerankHybridDocuments(question, candidates, entities).slice(0, limit);
 }
 
-async function retrieveChromaEvidence(question, entities = {}, limit = 8) {
+// ── HyDE：假设文档嵌入 ──────────────────────────────────────────
+// 让 LLM 先猜一个答案，用答案的语义（更接近文档空间）增强 embedding 检索
+async function generateHypotheticalAnswer(question) {
+    const prompt = `用1-2句话写出下面问题的可能答案，直接给出具体数据和结论，不确定也要猜测：\n${question}`;
+    try {
+        const raw = await Promise.race([
+            generateFast(prompt, 8000),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('HyDE超时')), 4000))
+        ]);
+        return raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim().slice(0, 400);
+    } catch {
+        return '';
+    }
+}
+
+async function retrieveChromaEvidence(question, entities = {}, limit = 8, hydeText = '') {
     if (!collection) return [];
     try {
-        const queryEmbedding = await Promise.race([
-            getEmbedding(expandQueryForRetrieval(question, entities)),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Chroma embedding 超时')), 10000))
-        ]);
+        // ── 页码查询检测（"第N页" + 可选《书名》）────────────────────
+        const pageQueryMatch = question.match(/第\s*(\d{1,4})\s*页/);
+        const queryPage = pageQueryMatch ? parseInt(pageQueryMatch[1]) : null;
+        const bookMatch = question.match(/《([^》]{2,50})》/);
+        const queryFilenameHint = bookMatch
+            ? bookMatch[1].replace(/\.pdf$/i, '').trim()
+            : null;
 
-        // 构建 metadata 过滤条件
-        let whereFilter = undefined;
-        const hasRegion = entities.regions?.length > 0 && !entities.regions.includes('全国');
-        const hasSingleYear = entities.years?.length === 1;
+        // 页码查询时去掉"第N页"和《书名》再做语义搜索，避免干扰 embedding
+        const semanticQuestion = queryPage
+            ? question.replace(/第\s*\d{1,4}\s*页/, '').replace(/《[^》]+》/g, '').trim() || question
+            : question;
 
-        if (hasRegion && hasSingleYear) {
-            whereFilter = {
-                '$and': [
-                    { 'region': { '$in': entities.regions } },
-                    { 'year': { '$eq': entities.years[0] } }
-                ]
-            };
-        } else if (hasRegion) {
-            whereFilter = { 'region': { '$in': entities.regions } };
-        } else if (hasSingleYear) {
-            whereFilter = { 'year': { '$eq': entities.years[0] } };
+        const baseQuery = expandQueryForRetrieval(semanticQuestion, entities);
+        let queryEmbedding;
+        if (hydeText) {
+            // 平均 HyDE embedding 与原始 query embedding，融合"文档语义"与"问题语义"
+            const [origEmb, hydeEmb] = await Promise.all([
+                getEmbedding(baseQuery),
+                getEmbedding(hydeText)
+            ]);
+            queryEmbedding = origEmb.map((v, i) => (v + hydeEmb[i]) / 2);
+        } else {
+            queryEmbedding = await Promise.race([
+                getEmbedding(baseQuery),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Chroma embedding 超时')), 10000))
+            ]);
         }
+
+        // ── 知识文档精准过滤逻辑 ────────────────────────────
+        // doc_year 过滤：问题或 entities 中有明确年份时优先匹配该年发布的文档
+        // 只在问题含报告/全球特征时启用，避免干扰纯结构化数据查询的 ChromaDB 辅助召回
+        const isKnowledgeQuery = /报告|指数|白皮书|研究|分析|发布|发表|出版/.test(question) || GLOBAL_COUNTRIES_RE.test(question);
+        const yearInQ = (question + ' ' + String(entities.year || '')).match(/20(2[0-9])/);
+        const docYearFilter = (isKnowledgeQuery && yearInQ) ? parseInt(yearInQ[0]) : null;
+
+        // 具体国家过滤（排除全球/国际/世界等泛指词）：用 whereDocument.$contains 做内容级过滤
+        const specificCountry = KNOWLEDGE_SPECIFIC_COUNTRIES.find(c => question.includes(c));
 
         const queryParams = {
             queryEmbeddings: [queryEmbedding],
             nResults: Math.min(Math.max(limit * 2, 16), 50)
         };
-        if (whereFilter) queryParams.where = whereFilter;
 
-        let result = await Promise.race([
-            collection.query(queryParams),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Chroma query 超时')), 8000))
-        ]);
+        // 构建 where 过滤器
+        if (queryPage !== null) {
+            console.log(`📄 页码查询：第${queryPage}页${queryFilenameHint ? ' · ' + queryFilenameHint : ''}`);
+            queryParams.where = { '$and': [{ 'table': { '$eq': 'knowledge' } }, { 'page': { '$eq': queryPage } }] };
+        } else if (docYearFilter) {
+            queryParams.where = { '$and': [{ 'table': { '$eq': 'knowledge' } }, { 'doc_year': { '$eq': docYearFilter } }] };
+            console.log(`📅 知识文档年份过滤：doc_year=${docYearFilter}${specificCountry ? ' + 国家:' + specificCountry : ''}`);
+            if (specificCountry) queryParams.whereDocument = { '$contains': specificCountry };
+        } else {
+            queryParams.where = { 'table': { '$eq': 'knowledge' } };
+            if (specificCountry) {
+                queryParams.whereDocument = { '$contains': specificCountry };
+                console.log(`🌍 知识文档国家过滤：${specificCountry}`);
+            }
+        }
+
+        let result;
+        try {
+            result = await Promise.race([
+                collection.query(queryParams),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Chroma query 超时')), 8000))
+            ]);
+        } catch (e) {
+            // whereDocument 不被当前 ChromaDB 版本支持时，去掉该参数重试
+            if (queryParams.whereDocument) {
+                console.warn('⚠️ whereDocument 不支持，降级重试（无内容过滤）:', e.message?.slice(0, 80));
+                const fallbackParams = { ...queryParams };
+                delete fallbackParams.whereDocument;
+                result = await Promise.race([
+                    collection.query(fallbackParams),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Chroma query 超时')), 8000))
+                ]);
+            } else {
+                throw e;
+            }
+        }
 
         let docs = result?.documents?.[0] || [];
         let metadatas = result?.metadatas?.[0] || [];
         let distances = result?.distances?.[0] || [];
 
-        // 过滤后结果不足时，去掉过滤再补充召回
-        if (docs.length < limit && whereFilter) {
-            console.log('⚠️ Chroma 过滤后结果不足，去掉过滤重查...');
+        // 结果不足时（非页码查询）扩大召回，回退到无精准过滤的兜底查询
+        if (docs.length < limit && queryPage === null) {
+            // 若有国家过滤且结果为空，先单独用 whereDocument 做关键词召回补充
+            if (specificCountry && docs.length === 0) {
+                try {
+                    const kwResult = await Promise.race([
+                        collection.query({ queryEmbeddings: [queryEmbedding], nResults: limit * 2,
+                            where: { 'table': { '$eq': 'knowledge' } },
+                            whereDocument: { '$contains': specificCountry } }),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('超时')), 5000))
+                    ]);
+                    const kwDocs = kwResult?.documents?.[0] || [];
+                    if (kwDocs.length > 0) {
+                        docs = kwDocs;
+                        metadatas = kwResult?.metadatas?.[0] || [];
+                        distances = kwResult?.distances?.[0] || [];
+                        console.log(`🌍 国家关键词召回补充 ${docs.length} 条（${specificCountry}）`);
+                    }
+                } catch (_) { /* whereDocument 失败则跳过 */ }
+            }
+            if (docs.length < limit) {
+            console.log('⚠️ Chroma 结果不足，扩大召回（去掉年份/国家过滤）...');
             const fallbackResult = await Promise.race([
-                collection.query({ queryEmbeddings: [queryEmbedding], nResults: limit * 2 }),
+                collection.query({ queryEmbeddings: [queryEmbedding], nResults: limit * 2, where: { 'table': { '$eq': 'knowledge' } } }),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Chroma fallback 超时')), 8000))
             ]);
             const fbDocs = fallbackResult?.documents?.[0] || [];
@@ -1216,15 +1567,69 @@ async function retrieveChromaEvidence(question, entities = {}, limit = 8) {
             fbDocs.forEach((d, i) => {
                 if (!seen.has(d)) { seen.add(d); docs.push(d); metadatas.push(fbMeta[i]); distances.push(fbDist[i]); }
             });
-        }
+            } // end if docs.length < limit (inner)
+        } // end if docs.length < limit (outer)
 
-        const items = docs
+        let items = docs
             .map((text, i) => ({ text: String(text || ''), metadata: metadatas[i] || {}, distance: distances[i], source: 'ChromaDB' }))
             .filter(item => item.text.trim())
             .sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1))
             .slice(0, limit);
 
-        console.log(`📡 Chroma 召回 ${items.length} 条，最近距离: ${items[0]?.distance?.toFixed(4) ?? 'N/A'}`);
+        // 如果指定了书名，优先展示匹配文件的结果（软过滤：匹配的排前，不删除不匹配的）
+        if (queryPage !== null && queryFilenameHint) {
+            const matched = items.filter(item => {
+                const fn = (item.metadata?.filename || item.metadata?.source || '').replace(/\.pdf$/i, '');
+                return fn.includes(queryFilenameHint) || queryFilenameHint.includes(fn.slice(0, 6));
+            });
+            if (matched.length > 0) {
+                const unmatched = items.filter(item => !matched.includes(item));
+                items = [...matched, ...unmatched].slice(0, limit);
+                console.log(`📄 书名过滤：${matched.length}条匹配「${queryFilenameHint}」，共保留${items.length}条`);
+            }
+        }
+
+        console.log(`📡 Chroma 向量召回 ${items.length} 条，最近距离: ${items[0]?.distance?.toFixed(4) ?? 'N/A'}`);
+
+        // ── 关键词兜底：向量召回不足或质量差时，用 where_document 文本匹配补充 ──
+        // 触发条件：召回数量不足，或最佳向量距离 > 0.45（余弦相似度 < 0.55，说明匹配质量低）
+        // 注意：0.22 阈值过严，会把相似度 0.78 的优质结果也触发兜底，引入噪声
+        const bestDist = items[0]?.distance ?? 1;
+        if (items.length < Math.ceil(limit / 2) || bestDist > 0.45) {
+            // 按词长降序：越长越具体，越容易精准命中目标内容
+            const keywords = extractKeywordsForChroma(question).sort((a, b) => b.length - a.length);
+            if (keywords.length) {
+                for (const kw of keywords.slice(0, 3)) {
+                    try {
+                        const kwResult = await Promise.race([
+                            collection.get({
+                                where: { 'table': { '$eq': 'knowledge' } },
+                                whereDocument: { '$contains': kw },
+                                limit: limit * 2,
+                                include: ['documents', 'metadatas']
+                            }),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('关键词检索超时')), 5000))
+                        ]);
+                        const kwDocs = kwResult?.documents || [];
+                        const kwMeta = kwResult?.metadatas || [];
+                        const seen = new Set(items.map(d => d.text));
+                        kwDocs.forEach((text, i) => {
+                            const t = String(text || '').trim();
+                            if (t && !seen.has(t)) {
+                                seen.add(t);
+                                items.push({ text: t, metadata: kwMeta[i] || {}, distance: 0.6, source: 'ChromaDB-keyword' });
+                            }
+                        });
+                        // 不再提前 break：让所有关键词都搜完，保证最具体的词也被使用
+                    } catch (kwErr) {
+                        console.warn(`关键词检索失败 [${kw}]:`, kwErr.message);
+                    }
+                }
+                items = items.slice(0, limit);
+                console.log(`📡 关键词补充后共 ${items.length} 条`);
+            }
+        }
+
         return items;
     } catch (err) {
         console.warn(`Chroma 向量检索失败，已回退本地检索: ${err.message}`);
@@ -1232,11 +1637,20 @@ async function retrieveChromaEvidence(question, entities = {}, limit = 8) {
     }
 }
 
-function isKnowledgeChatQuestion(question) {
-    const q = String(question || '');
-    if (/(怎么预测|用什么模型|什么算法|置信区间|怎么得出)/.test(q)) return false;
-    return /(怎么看|分析一下|解读|评价|说明|为什么|原因|关系|影响|建议|总体|整体|概况|怎么样|是否|能不能|适合|帮我写|总结)/.test(q);
+/**
+ * 从问题中提取适合 ChromaDB where_document 文本匹配的关键词
+ * 过滤掉停用词和过短词，保留实质性词汇
+ */
+function extractKeywordsForChroma(question) {
+    const stopwords = new Set(['的', '了', '吗', '呢', '啊', '是', '有', '在', '和', '与', '或', '对', '把', '被', '让', '使',
+        '这', '那', '什么', '怎么', '为什么', '如何', '哪些', '多少', '几个', '一个', '请问', '告诉', '介绍', '分析',
+        '情况', '表现', '特点', '问题', '方面', '目前', '现在', '近年', '最近', '未来', '发展', '变化', '趋势']);
+    // 提取2字以上、不在停用词表里的词组
+    const tokens = question.match(/[一-龥a-zA-Z]{2,}/g) || [];
+    return [...new Set(tokens.filter(t => !stopwords.has(t) && t.length >= 2))];
 }
+
+
 
 function buildEvidenceFallbackAnswer(question, evidence, entities = {}) {
     if (!evidence.length) {
@@ -1263,12 +1677,21 @@ function gradeRetrievedEvidence(question, entities = {}, localEvidence = [], chr
         ...localEvidence.slice(0, 5).map(doc => doc.text || ''),
         ...chromaEvidence.slice(0, 5).map(doc => doc.text || '')
     ].join('\n');
-    const metricHit = !cleanMetric || joined.includes(cleanMetric) || joined.includes(metric);
+    // 精确命中 > 前缀部分命中（取前8字），避免指标名细微差异（如括号/单位）导致CRAG反复重查
+    const metricPrefix = cleanMetric.slice(0, 8);
+    const metricHit = !cleanMetric || joined.includes(cleanMetric) || joined.includes(metric) ||
+        (metricPrefix.length >= 4 && joined.includes(metricPrefix));
     const regionHit = !regions.length || regions.some(region => joined.includes(region));
     const yearHit = !years.length || years.some(year => joined.includes(year));
     const enoughLocal = localEvidence.length >= 3 && localTopScore >= 3.0;
     const enoughVector = chromaEvidence.length >= 2 && (chromaBestDistance == null || chromaBestDistance <= 0.5);
-    const passed = (enoughLocal || enoughVector) && metricHit && regionHit && yearHit;
+    // 命中知识文档时不强制要求 regionHit/yearHit：
+    // 知识文档 chunk 可能不显式包含省份/年份字符串，但内容仍然相关
+    // 去掉"localEvidence 为空"的限制，避免偶发的低质量本地行导致 yearOk 失效
+    const hasKnowledgeHit = chromaEvidence.some(d => d.metadata?.table === 'knowledge' || d.source === 'ChromaDB');
+    const regionOk  = regionHit  || hasKnowledgeHit;
+    const yearOk    = yearHit    || hasKnowledgeHit;
+    const passed = (enoughLocal || enoughVector) && metricHit && regionOk && yearOk;
     const reasons = [];
     if (!passed) {
         if (!enoughLocal && !enoughVector) reasons.push('召回数量或相关度不足');
@@ -1276,7 +1699,8 @@ function gradeRetrievedEvidence(question, entities = {}, localEvidence = [], chr
         if (!regionHit) reasons.push('未稳定命中地区');
         if (!yearHit) reasons.push('未稳定命中年份');
     }
-    const chromaScore = chromaEvidence.length ? Math.max(0, 0.2 - (chromaBestDistance ?? 1) * 0.1) : 0;
+    // chromaScore 范围 0~0.5：distance=0 → 0.5，distance=0.5 → 0.25，distance>=1 → 0
+    const chromaScore = chromaEvidence.length ? Math.max(0, 0.5 - (chromaBestDistance ?? 1) * 0.5) : 0;
     return {
         passed,
         score: Number(Math.min(0.96, 0.28 + localTopScore / 10 + chromaScore).toFixed(2)),
@@ -1286,77 +1710,321 @@ function gradeRetrievedEvidence(question, entities = {}, localEvidence = [], chr
     };
 }
 
+// ── CRAG 升级：LLM 评估器 ─────────────────────────────────────
+// 规则已明确通过(score>0.75)时跳过LLM节省延迟；borderline/明确失败时调LLM二次判定
+async function gradeRetrievedEvidenceWithLLM(question, entities, localEvidence, chromaEvidence) {
+    const ruleGrade = gradeRetrievedEvidence(question, entities, localEvidence, chromaEvidence);
+    // 规则高置信通过，直接用
+    if (ruleGrade.passed && ruleGrade.score >= 0.75) {
+        return { ...ruleGrade, llmGrade: 'skipped', evaluator: 'rule' };
+    }
+    // 无任何证据，不用LLM
+    const allDocs = [...localEvidence.slice(0, 3), ...chromaEvidence.slice(0, 3)];
+    if (!allDocs.length) return { ...ruleGrade, llmGrade: 'incorrect', evaluator: 'rule' };
+
+    const docSnippets = allDocs
+        .map((d, i) => {
+            const cleanText = String(d.text || '').replace(/^(【(来源|章节)[^】]*】\n*)+/, '');
+            return `[${i + 1}] ${cleanText.slice(0, 350)}`;
+        })
+        .join('\n');
+    const prompt = `你是RAG检索质量评估器。判断检索证据是否能回答用户问题。
+
+用户问题：${question}
+检索证据：
+${docSnippets}
+
+仅返回JSON，不要多余文字：
+{"grade":"correct"|"ambiguous"|"incorrect","reason":"一句话","confidence":0.0到1.0}`;
+
+    try {
+        const raw = await generateFast(prompt, 8000);
+        const match = raw.match(/\{[\s\S]*?\}/);
+        const json = match ? JSON.parse(match[0]) : {};
+        const llmGrade = ['correct', 'ambiguous', 'incorrect'].includes(json.grade) ? json.grade : 'ambiguous';
+        const confidence = typeof json.confidence === 'number' ? json.confidence : 0.5;
+        const passed = llmGrade === 'correct' || (llmGrade === 'ambiguous' && ruleGrade.passed);
+        return {
+            passed,
+            score: Number(Math.min(0.96, confidence).toFixed(2)),
+            llmGrade,
+            reasons: [json.reason || ''],
+            localTopScore: ruleGrade.localTopScore,
+            chromaBestDistance: ruleGrade.chromaBestDistance,
+            evaluator: 'llm'
+        };
+    } catch (e) {
+        console.warn('LLM评估器失败，回退规则:', e.message);
+        return { ...ruleGrade, llmGrade: 'unknown', evaluator: 'rule_fallback' };
+    }
+}
+
 async function rewriteQueryForCorrectiveRag(question, entities = {}, grade = {}) {
     const metric = entities.metrics?.[0] || inferMetric(question);
-    const years = entities.years?.length ? entities.years.join(' ') : '';
-    const regions = entities.regions?.length ? entities.regions.join(' ') : '';
-    const query = [
-        question,
-        regions,
-        metric,
-        cleanMetricName(metric),
-        years,
-        expandQueryForRetrieval(question, entities)
-    ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-    return {
-        query,
-        reason: `检索质检未通过（${(grade.reasons || []).join('；') || '相关度不足'}），已用地区、年份、指标和同义词扩展查询后重新召回。`
-    };
+    const years = entities.years?.length ? entities.years.join('、') : '';
+    const regions = entities.regions?.length ? entities.regions.join('、') : '';
+    const failReasons = (grade.reasons || []).join('；') || '相关度不足';
+
+    // 规则兜底：若LLM超时则直接拼接扩词
+    const ruleQuery = [question, regions, metric, cleanMetricName(metric), years,
+        expandQueryForRetrieval(question, entities)].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+
+    const prompt = `你是RAG查询改写器。第一次检索失败原因：${failReasons}。
+请把用户原始问题改写成更适合向量检索的新查询，要求：
+1. 补全省略的地区/年份/指标全称
+2. 加入同义词和相关概念
+3. 只返回改写后的查询字符串，不要解释，不要JSON
+
+原始问题：${question}
+已知地区：${regions || '未指定'}
+已知指标：${metric ? cleanMetricName(metric) : '未指定'}
+已知年份：${years || '未指定'}`;
+
+    try {
+        const rewritten = (await generateFast(prompt, 6000)).replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+        const query = rewritten && rewritten.length > 4 && rewritten.length < 300 ? rewritten : ruleQuery;
+        return { query, reason: `LLM改写查询（原因：${failReasons}）` };
+    } catch (e) {
+        return { query: ruleQuery, reason: `规则扩词改写（LLM失败：${e.message}）` };
+    }
+}
+
+// ── CRAG 升级：网络搜索兜底 ──────────────────────────────────
+async function webSearchFallback(question, entities) {
+    if (!TAVILY_API_KEY && !SERPER_API_KEY) return [];
+    const metric  = entities.metrics?.[0]  ? cleanMetricName(entities.metrics[0])  : '';
+    const year    = entities.years?.[0]    || '';
+    // entities.regions 只含中国省份；全球查询时 regions 为空，用问题原文避免搜错方向
+    const isGlobalQ = entities.regions?.length === 0 && !metric;
+    const searchQ = isGlobalQ
+        ? question.slice(0, 80)   // 直接用问题原文，不附加"科研教育人才"
+        : [entities.regions?.[0] || '中国', metric, year, '科研教育人才 统计数据'].filter(Boolean).join(' ');
+    try {
+        if (TAVILY_API_KEY) {
+            const resp = await fetch('https://api.tavily.com/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ api_key: TAVILY_API_KEY, query: searchQ, max_results: 5, search_depth: 'basic' })
+            });
+            if (!resp.ok) throw new Error(`Tavily ${resp.status}`);
+            const data = await resp.json();
+            return (data.results || []).map(r => ({
+                text: `【网络来源】${r.title}\n${r.content || r.snippet || ''}`,
+                source: 'web', url: r.url, distance: 0.35, score: 2
+            }));
+        }
+        if (SERPER_API_KEY) {
+            const resp = await fetch('https://google.serper.dev/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-API-KEY': SERPER_API_KEY },
+                body: JSON.stringify({ q: searchQ, num: 5, gl: 'cn', hl: 'zh-cn' })
+            });
+            if (!resp.ok) throw new Error(`Serper ${resp.status}`);
+            const data = await resp.json();
+            return (data.organic || []).map(r => ({
+                text: `【网络来源】${r.title}\n${r.snippet || ''}`,
+                source: 'web', url: r.link, distance: 0.35, score: 2
+            }));
+        }
+    } catch (e) {
+        console.warn('网络搜索兜底失败:', e.message);
+    }
+    return [];
+}
+
+// ── CRAG 升级：知识精炼 ───────────────────────────────────────
+// 从检索到的文档里提取与问题直接相关的片段，去掉噪音
+async function refineKnowledge(question, documents) {
+    if (!documents.length) return documents;
+    // 只对包含知识文档的结果做精炼（纯结构化数据精炼意义不大）
+    const hasDocs = documents.some(d => d.source === 'ChromaDB' || d.source === 'web' || d.metadata?.table === 'knowledge');
+    if (!hasDocs) return documents;
+
+    // 每个 chunk 最多 1100 字（需覆盖章节前缀开销），取前 10 个 chunk
+    const docText = documents.slice(0, 10)
+        .map((d, i) => {
+            const src = d.metadata?.filename || d.metadata?.source || d.source || '';
+            const section = d.metadata?.section ? ` §${d.metadata.section}` : '';
+            const page = d.metadata?.page ? `  第${d.metadata.page}页` : '';
+            // 去掉入库时的 【来源/章节】 前缀标记，让 LLM 只看实质内容
+            const cleanText = String(d.text || '').replace(/^(【(来源|章节)[^】]*】\n*)+/, '');
+            return `[文档${i + 1}${src ? ' · ' + src : ''}${section}${page}]\n${cleanText.slice(0, 1100)}`;
+        }).join('\n\n');
+
+    const prompt = `从以下文档中精炼出与问题直接相关的信息，保留所有原始数据、数字、百分比和表格内容，不要省略具体数值。
+如果文档与问题完全无关，返回空字符串。
+注意：文档中以"[图表内容]"开头的段落是从图表图片中识别出的描述，直接提取其中数据即可，不要把"[图表内容]"输出到结果里。
+
+问题：${question}
+
+文档：
+${docText}
+
+直接输出精炼后的内容，不要标题和解释：`;
+
+    const totalInputLen = documents.slice(0, 10).reduce((s, d) => s + String(d.text || '').length, 0);
+    try {
+        const refined = (await generateFast(prompt, 8000))
+            .replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+        // 兜底1：精炼结果过短（< 10字）→ 直接用原始列表
+        if (!refined || refined.length < 10) return documents;
+        // 兜底2：精炼结果 < 原始总长 15% → 过度压缩，可能丢失关键数据，丢弃精炼
+        if (totalInputLen > 200 && refined.length < totalInputLen * 0.15) {
+            console.warn(`⚠️ 知识精炼过度压缩(${refined.length}/${totalInputLen})，使用原始文档`);
+            return documents;
+        }
+        // 精炼结果作为最高优先级文档插到最前
+        return [{ text: refined, source: 'refined', score: 6, distance: 0.1 }, ...documents];
+    } catch (e) {
+        console.warn('知识精炼失败，回退原始召回:', e.message);
+        return documents;
+    }
 }
 
 async function retrieveCorrectiveEvidence(question, entities = {}) {
-    const firstLocal = retrieveHybridEvidence(question, entities, 8);
-    const firstBm25 = retrieveBM25Evidence(question, entities, 5);
-    let firstChroma = [];
-    let firstGrade = gradeRetrievedEvidence(question, entities, firstLocal, [...firstBm25, ...firstChroma]);
-    if (!firstGrade.passed) {
-        firstChroma = await retrieveChromaEvidence(question, entities, 5);
-        firstGrade = gradeRetrievedEvidence(question, entities, firstLocal, [...firstBm25, ...firstChroma]);
-    }
-    if (firstGrade.passed) {
-        return { evidence: firstLocal, chromaEvidence: [...firstBm25, ...firstChroma], grade: firstGrade, corrected: false, query: question, originalGrade: firstGrade, rewriteReason: '' };
+    // ── 第一轮检索：结构化数据 + BM25 + ChromaDB(+HyDE) 并行 ─────
+    // 第一轮同时生成 HyDE 假设答案，提升 ChromaDB 第一轮命中率，减少触发第二轮的概率
+    const [firstHydeText, firstLocal, firstBm25] = await Promise.all([
+        generateHypotheticalAnswer(question),
+        Promise.resolve(retrieveHybridEvidence(question, entities, 8)),
+        Promise.resolve(retrieveBM25Evidence(question, entities, 5))
+    ]);
+    const firstChroma = await retrieveChromaEvidence(question, entities, 5, firstHydeText);
+
+    // LLM评估（规则明确通过时跳过LLM）
+    const firstGrade = await gradeRetrievedEvidenceWithLLM(question, entities, firstLocal, [...firstBm25, ...firstChroma]);
+
+    // 第一轮通过 → MMR 去重后知识精炼返回
+    if (firstGrade.passed && firstGrade.llmGrade !== 'ambiguous') {
+        const deduped = applyMMR([...firstBm25, ...firstChroma], 0.7, 8);
+        const refined = await refineKnowledge(question, deduped);
+        return { evidence: firstLocal, chromaEvidence: refined, grade: firstGrade,
+                 corrected: false, query: question, originalGrade: firstGrade, rewriteReason: '' };
     }
 
-    const rewrite = await rewriteQueryForCorrectiveRag(question, entities, firstGrade);
+    // ── 第二轮：LLM改写（HyDE 复用第一轮生成的，避免重复调用）────
+    const [rewrite] = await Promise.all([
+        rewriteQueryForCorrectiveRag(question, entities, firstGrade)
+    ]);
+    const hydeText = firstHydeText; // 复用第一轮 HyDE
     const rewrittenEntities = extractEntities(rewrite.query);
     const mergedEntities = {
         ...entities,
         regions: [...new Set([...(entities.regions || []), ...(rewrittenEntities.regions || [])])],
         metrics: [...new Set([...(entities.metrics || []), ...(rewrittenEntities.metrics || [])])],
-        years: [...new Set([...(entities.years || []), ...(rewrittenEntities.years || [])])]
+        years:   [...new Set([...(entities.years   || []), ...(rewrittenEntities.years   || [])])]
     };
-    const secondLocal = retrieveHybridEvidence(rewrite.query, mergedEntities, 8);
-    const secondBm25 = retrieveBM25Evidence(rewrite.query, mergedEntities, 5);
-    let secondChroma = [];
-    let secondGrade = gradeRetrievedEvidence(question, mergedEntities, secondLocal, [...secondBm25, ...secondChroma]);
-    if (!secondGrade.passed) {
-        secondChroma = await retrieveChromaEvidence(rewrite.query, mergedEntities, 5);
-        secondGrade = gradeRetrievedEvidence(question, mergedEntities, secondLocal, [...secondBm25, ...secondChroma]);
+
+    const secondLocal  = retrieveHybridEvidence(rewrite.query, mergedEntities, 8);
+    const secondBm25   = retrieveBM25Evidence(rewrite.query, mergedEntities, 5);
+    let   secondChroma = await retrieveChromaEvidence(rewrite.query, mergedEntities, 5, hydeText);
+    let   secondGrade  = await gradeRetrievedEvidenceWithLLM(question, mergedEntities, secondLocal, [...secondBm25, ...secondChroma]);
+
+    // ── 第三轮：grade=incorrect 或 ambiguous → 网络搜索兜底 ──────
+    // ambiguous 也触发：知识文档类问题在本地库不完整，需要网络补充
+    const needsWeb = !secondGrade.passed && (
+        firstGrade.llmGrade === 'incorrect' || secondGrade.llmGrade === 'incorrect' ||
+        firstGrade.llmGrade === 'ambiguous' || secondGrade.llmGrade === 'ambiguous'
+    );
+    let webEvidence = [];
+    if (needsWeb) {
+        webEvidence = await webSearchFallback(question, entities);
+        if (webEvidence.length) {
+            secondChroma = [...secondChroma, ...webEvidence];
+            secondGrade  = await gradeRetrievedEvidenceWithLLM(question, mergedEntities, secondLocal, secondChroma);
+        }
     }
-    const firstVectorEvidence = [...firstBm25, ...firstChroma];
-    const secondVectorEvidence = [...secondBm25, ...secondChroma];
-    const useSecond = secondGrade.passed || (secondLocal.length + secondVectorEvidence.length) >= (firstLocal.length + firstVectorEvidence.length);
+
+    // 选更好的那轮结果
+    const firstVec  = [...firstBm25,  ...firstChroma];
+    const secondVec = [...secondBm25, ...secondChroma];
+    const useSecond = secondGrade.passed
+        || (secondLocal.length + secondVec.length) >= (firstLocal.length + firstVec.length);
+
+    const finalLocal = useSecond ? secondLocal : firstLocal;
+    const finalVec   = useSecond ? secondVec   : firstVec;
+
+    // ── MMR 去重 + 知识精炼 ──────────────────────────────────────
+    const refined = await refineKnowledge(question, applyMMR(finalVec, 0.7, 8));
+
     return {
-        evidence: useSecond ? secondLocal : firstLocal,
-        chromaEvidence: useSecond ? secondVectorEvidence : firstVectorEvidence,
-        grade: useSecond ? secondGrade : firstGrade,
-        corrected: true,
-        query: rewrite.query,
+        evidence:      finalLocal,
+        chromaEvidence: refined,
+        grade:         useSecond ? secondGrade : firstGrade,
+        corrected:     true,
+        query:         rewrite.query,
         originalGrade: firstGrade,
-        rewriteReason: rewrite.reason
+        rewriteReason: rewrite.reason,
+        webSearchUsed: webEvidence.length > 0
     };
 }
 
 async function answerEvidenceChat(question, entities, recentHistory = []) {
-    const corrective = await retrieveCorrectiveEvidence(question, entities);
-    const evidence = corrective.evidence;
-    const chromaEvidence = corrective.chromaEvidence;
+    // 明确问报告/白皮书/文献，或问非中国地区话题（德国、美国等）时，跳过本地结构化数据，只用 ChromaDB 回答
+    const isReportQuery = /报告|白皮书|文献|指数报告|研究报告|调研|发布的|根据.*报|按照.*报/.test(question);
+    const isGlobalQuery = /德国|美国|日本|欧洲|全球|国际|英国|法国|韩国|亚洲|世界|海外|印度|俄罗斯|意大利|加拿大|澳大利亚|新加坡|荷兰|瑞典|芬兰|挪威|丹麦|瑞士|以色列|巴西|墨西哥|阿根廷|西班牙|葡萄牙|波兰|捷克|匈牙利|奥地利|比利时|土耳其|沙特|阿联酋|泰国|越南|马来西亚|印尼|菲律宾|南非|埃及/.test(question);
+    let corrective, evidence, chromaEvidence;
+    if (isReportQuery || isGlobalQuery) {
+        console.log(`🌐 ${isGlobalQuery ? '全球话题' : '报告查询'}，跳过本地结构化数据，直接检索 ChromaDB:`, question);
+        const hydeText = await generateHypotheticalAnswer(question).catch(() => '');
+        // 枚举类问题（分别/各是/几个/多少个）召回更多，避免漏掉后续章节
+        const isEnumerationQ = /分别|各是|各有|几个|多少个|所有|全部|都有哪|列出/.test(question);
+        let chroma = await retrieveChromaEvidence(question, entities, isEnumerationQ ? 15 : 10, hydeText).catch(() => []);
+
+        // BM25 知识兜底：ChromaDB 返回的 chunk 中实际含目标国家词不足时补充
+        // 适用场景：章节标题未入库导致 whereDocument 过滤失效，宽泛召回返回无关内容
+        const specificCountryQ = KNOWLEDGE_SPECIFIC_COUNTRIES.find(c => question.includes(c));
+        const countryHitsInChroma = specificCountryQ
+            ? chroma.filter(c => (c.text || '').includes(specificCountryQ)).length
+            : 0;
+        if (specificCountryQ && countryHitsInChroma < 2 && bm25Index && allDocuments.length) {
+            try {
+                const bm25Hits = bm25Index.search(specificCountryQ, { limit: 40 });
+                const existingTexts = new Set(chroma.map(c => (c.text || '').slice(0, 80)));
+                const bm25Extras = bm25Hits
+                    .map(idx => allDocuments[Number(idx)])
+                    .filter(t => t && t.includes(specificCountryQ) && !existingTexts.has(t.slice(0, 80)))
+                    .slice(0, 6)
+                    .map(t => ({ text: t, metadata: {}, source: 'BM25-knowledge', score: 0.5, distance: 0.1 }));
+                if (bm25Extras.length > 0) {
+                    console.log(`📚 BM25 知识补充 ${bm25Extras.length} 条（${specificCountryQ}）`);
+                    chroma = [...chroma, ...bm25Extras];
+                }
+            } catch (_) { /* BM25 失败静默跳过 */ }
+        }
+
+        const refined = await refineKnowledge(question, applyMMR(chroma, 0.7, 8));
+        corrective = { evidence: [], chromaEvidence: refined, grade: { passed: chroma.length > 0 }, corrected: false, query: question, originalGrade: {}, rewriteReason: '', webSearchUsed: false };
+        evidence = [];
+        chromaEvidence = refined;
+    } else {
+        corrective = await retrieveCorrectiveEvidence(question, entities);
+        evidence = corrective.evidence;
+        chromaEvidence = corrective.chromaEvidence;
+    }
+
+    // ── 相关性检查：若检索证据与问题主题完全不相符，直接走 chat ──
+    const qKeywords = question.replace(/[？?。，,！!的了吗呢啊是否有哪些多少]/g, ' ')
+        .split(/\s+/).filter(w => w.length >= 2);
+    const evidenceText_all = evidence.map(d =>
+        `${d.region}${d.table}${Object.keys(d.row || {}).join('')}`
+    ).join('') + chromaEvidence.map(d => d.text || '').join('');
+
+    const hasRelevantEvidence = qKeywords.some(kw => evidenceText_all.includes(kw));
+
+    // 知识文档命中时（ChromaDB 有内容）跳过关键词检查，避免误 fallback
+    const hasKnowledgeDocs = chromaEvidence.some(d => d.source === 'ChromaDB' || d.source === 'refined' || d.metadata?.table === 'knowledge');
+    const isPureDataQuery = entities.metrics?.length > 0 || entities.regions?.length > 0;
+    if (!hasRelevantEvidence && !isPureDataQuery && !hasKnowledgeDocs && (evidence.length + chromaEvidence.length) > 0) {
+        console.log('⚠️ evidence_chat 证据与问题不相关，fallback 到 chat:', question);
+        return answerGeneralChat(question, recentHistory);
+    }
 
     const evidenceText = evidence.map((doc, i) =>
         `[${i + 1}] ${doc.table}/${doc.region}/${doc.year}: ${buildRelevantMetricSnapshot(doc.row, question, entities, 10)}`
     ).join('\n');
     const chromaText = chromaEvidence.map((doc, i) =>
-        `[V${i + 1}] ${doc.text.slice(0, 900)}`
+        `[V${i + 1}] ${doc.text.slice(0, 2000)}`
     ).join('\n');
     const historyText = recentHistory
         .slice(-6)
@@ -1366,16 +2034,35 @@ async function answerEvidenceChat(question, entities, recentHistory = []) {
     let answer = '';
     let usedModel = false;
 
+    // 构建页码引用提示
+    const chromaSourceHint = chromaEvidence
+        .filter(d => d.metadata?.filename && d.metadata?.page)
+        .slice(0, 3)
+        .map((d, i) => {
+            const fname = d.metadata.filename;
+            const page = d.metadata.page;
+            const section = d.metadata?.section ? ` §${d.metadata.section}` : '';
+            const url = `/资料/${encodeURIComponent(fname)}#page=${page}`;
+            return `  [${i + 1}] 《${fname.replace(/\.pdf$/i, '')}》第${page}页${section} (${url})`;
+        })
+        .join('\n');
+    const sourceHintLine = chromaSourceHint
+        ? `\n可引用来源（回答末尾用"📄 来源：《文件名》第N页"格式标注，最多3个）：\n${chromaSourceHint}`
+        : '';
+
     if (evidence.length || chromaEvidence.length) {
         const prompt = `你是山东财经大学科研教育人才数据平台的研究助理。请只基于给定证据回答用户问题，不要编造数据。
 
 回答要求：
 1. 直接回答用户问题，语气自然，像专业助手在聊天。
 2. 用数据支撑结论，但不要把证据列表原样罗列给用户。
-3. 如果证据不足以回答，直接说明缺什么，建议用户补充地区、年份或指标。
-4. 不要主动推荐数据库或证据没有覆盖的问题方向，例如行业、国外/其他国家、企业、学校明细等。
+3. 如果证据不足以回答，直接说明缺什么，建议用户提供更多信息。
+4. 补充证据（白皮书/报告/文献）中若包含国外国家、全球比较、行业数据等内容，可以基于这些证据回答，不要拒绝。
 5. 不要输出<think>，不要提及"检索"、"向量库"、"RAG"等技术术语。
 6. 中文回答，结构清晰，适度简洁。
+7. 列举多个要点时，使用"一、二、三"或"①②③"等中文序号，不要使用"1. 2. 3."的 Markdown 有序列表格式（前端不渲染 Markdown）。
+8. 如果回答引用了补充证据中的报告内容，在回答末尾单独一行标注来源，格式：📄 来源：《报告名》第N页（URL）。最多标注3个。
+9. 补充证据中以"[图表内容]"开头的段落是从图片中识别出的图表描述，直接提取其中的数据和结论作为依据，不要把"[图表内容]"这几个字输出给用户。
 
 最近对话：
 ${historyText || '无'}
@@ -1385,7 +2072,7 @@ ${question}
 
 数据证据：
 ${evidenceText}
-${chromaText ? '\n补充证据：\n' + chromaText : ''}
+${chromaText ? '\n补充证据：\n' + chromaText : ''}${sourceHintLine}
 
 请直接回答：`;
         try {
@@ -1393,7 +2080,7 @@ ${chromaText ? '\n补充证据：\n' + chromaText : ''}
                 generateSync(prompt),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('证据生成超过60秒，快速降级')), 60000))
             ]);
-            answer = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+            answer = fixNumberedList(raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim());
             usedModel = !!answer;
         } catch (err) {
             console.warn('证据回答生成失败，使用本地摘要降级:', err.message);
@@ -1419,19 +2106,21 @@ ${chromaText ? '\n补充证据：\n' + chromaText : ''}
     ];
 
     return {
-        answer: sanitizeUnsupportedFollowups(answer),
+        answer: sanitizeUnsupportedFollowups(answer, hasKnowledgeDocs),
         chart: null,
         citations,
         reasoning: [
             '意图: corrective_rag',
             chromaEvidence.length ? '检索: ChromaDB向量库 + 本地混合索引' : '检索: 本地混合索引',
-            corrective.corrected ? '纠正: 查询已自动改写重新检索' : '质检: 初次检索通过',
+            corrective.corrected ? `纠正: ${corrective.rewriteReason || '查询已LLM改写重新检索'}` : `质检: 初次检索通过（评估器: ${corrective.grade?.evaluator || 'rule'}）`,
+            corrective.webSearchUsed ? '兜底: 已调用网络搜索补充证据' : null,
+            corrective.chromaEvidence?.some(d => d.source === 'refined') ? '精炼: 已提取文档关键片段' : null,
             `本地证据: ${evidence.length}条`,
             `向量证据: ${chromaEvidence.length}条`,
             usedModel ? '生成: 模型证据归纳' : '生成: 数据摘要降级'
-        ],
+        ].filter(Boolean),
         confidence: corrective.grade.passed ? 0.84 : ((evidence.length + chromaEvidence.length) >= 2 ? 0.66 : 0.42),
-        suggestions: ['换一个具体地区继续问', '指定年份和指标重新分析', '查看该指标近5年趋势'],
+        suggestions: buildContextualSuggestions(question, 'evidence_chat'),
         toolTrace: [{
             tool: 'corrective_rag',
             normalizedTool: 'corrective_rag',
@@ -1491,6 +2180,11 @@ function ruleBasedDecide(question, entities) {
     const yearMatch = q.match(/20\d{2}/g);
     const latestYear = getLatestYear(rawDataCache.province);
 
+    // 语义否决：含原因/评价/建议/解释意图的问题，规则不强行路由到结构化工具
+    // 这类问题即使含"趋势/排名"等词，用户也是在问"为什么"，应走 evidence_chat
+    const isAnalyticalIntent = /(为什么|原因|怎么看|如何看|评价|评估|建议|分析原因|说明原因|影响因素|背后|解释|论述|探讨|阐述)/.test(q);
+    if (isAnalyticalIntent) return null;
+
     // ① 趋势：最高优先级，"近N年/趋势/走势/变化/历年" → trend_analysis
     // Supports Arabic ("近10年"), Chinese ("近十年"), or no number ("趋势" defaults to 10 years for richer context)
     const trendMatchArabic = q.match(/近\s*(\d+)\s*年/);
@@ -1508,20 +2202,21 @@ function ruleBasedDecide(question, entities) {
             n = Math.max(2, Math.min(n, 30)); // safety cap
             years = Array.from({ length: n }, (_, i) => latestYear - n + 1 + i);
         }
-        return { tool: 'trend_analysis', params: { metric, region: region || null, years } };
+        return { tool: 'trend_analysis', params: { metric, region: region || '全国', years } };
     }
 
     // ② 预测："预测/预计/未来"
     if (/(预测|预计|未来)/.test(q)) {
         const targetYear = yearMatch ? parseInt(yearMatch[yearMatch.length - 1]) : latestYear + 2;
-        return { tool: 'forecast', params: { metric, region: region || null, targetYear } };
+        return { tool: 'forecast', params: { metric, region: region || '全国', targetYear } };
     }
 
     // ③ 对比两年："2022和2023/2022对比2023"
     if (yearMatch && yearMatch.length >= 2 && /(对比|比较|vs|和|与)/.test(q)) {
+        const region = entities.regions[0] || '全国';
         return {
             tool: 'compare',
-            params: { metric, year: parseInt(yearMatch[0]), regionA: '全国', regionB: '全国', compareYear: parseInt(yearMatch[1]) }
+            params: { metric, year: parseInt(yearMatch[0]), regionA: region, regionB: region, compareYear: parseInt(yearMatch[1]) }
         };
     }
 
@@ -1551,69 +2246,6 @@ function ruleBasedDecide(question, entities) {
 }
 
 // ========== Agent 决策（规则优先，模型兜底）==========
-async function agentDecide(question, entities) {
-    // 先走规则
-    const ruleResult = ruleBasedDecide(question, entities);
-    if (ruleResult) {
-        console.log('✅ 规则命中:', ruleResult.tool);
-        return ruleResult;
-    }
-
-    // 规则未命中，交给 LLM
-    console.log('⚙️ 规则未命中，调用 LLM...');
-    const prompt = `你是山东财经大学科研教育人才数据平台的工具路由器，不负责直接回答，只负责把用户问题转成一个可执行工具调用。
-
-用户问题: "${question}"
-已识别实体: ${JSON.stringify(entities)}
-
-硬性规则：
-- 只返回一个JSON对象，不要Markdown，不要解释，不要<think>。
-- tool 必须是下列之一：rank_provinces, compare_regions, predict_future, query_point, query_trend。
-- params 只放工具需要的字段，不要编造不存在的地区、年份或指标。
-- 用户问“预测/未来/预计”必须选 predict_future。
-- 用户问“排名/前N/最高/最低/top”必须选 rank_provinces。
-- 用户问两个地区或两个年份的差异必须选 compare_regions。
-- 用户问“趋势/近N年/历年/变化”必须选 query_trend。
-- 用户给出明确地区+年份+指标，且不是预测/排名/趋势/对比，选 query_point。
-- 没有地区时 region 填 null，让系统默认全国；没有年份时 year 填 0 或省略。
-
-工具参数 schema：
-rank_provinces: {"metric": string, "year": number, "order": "desc"|"asc", "topN": number}
-compare_regions: {"metric": string, "year": number, "regionA": string, "regionB": string, "compareYear": number|null}
-predict_future: {"metric": string, "region": string|null, "targetYear": number}
-query_point: {"metric": string, "region": string, "year": number}
-query_trend: {"metric": string, "region": string|null, "years": number[]|null}
-
-返回示例：
-{"tool":"predict_future","params":{"metric":"普通高校数量","region":"全国","targetYear":2026}}`;
-
-    for (let i = 0; i < 2; i++) {
-        try {
-            const raw = await generateFast(prompt, 15000);
-            const decision = safeParseJSON(raw);
-            if (decision && decision.tool && decision.params) {
-                // 修正类型
-                if (decision.params.year && typeof decision.params.year !== 'number')
-                    decision.params.year = parseInt(decision.params.year) || 0;
-                if (decision.params.compareYear && typeof decision.params.compareYear !== 'number')
-                    decision.params.compareYear = parseInt(decision.params.compareYear);
-                if (decision.params.order && !['desc','asc'].includes(decision.params.order))
-                    decision.params.order = 'desc';
-                console.log('✅ LLM 解析成功:', decision);
-                return decision;
-            }
-        } catch (e) {
-            console.log(`LLM attempt ${i+1} 失败:`, e.message);
-        }
-        await new Promise(r => setTimeout(r, 300));
-    }
-
-    // 最终降级
-    console.log('⚠️ LLM 失败，使用最终降级');
-    const metric = entities.metrics[0] || inferMetric(question);
-    const region = entities.regions[0] || null;
-    return { tool: 'trend_analysis', params: { metric, region, years: null } };
-}
 
 function normalizeAgentDecision(decision, entities = {}, question = '') {
     if (!decision || typeof decision !== 'object') return null;
@@ -1647,7 +2279,8 @@ async function llmPlanSingleAgent(question, entities, recentHistory = [], lastMe
         ? recentHistory.slice(-6).map(h => `${h.role === 'user' ? '用户' : '助手'}: ${String(h.content || '').slice(0, 180)}`).join('\n')
         : '';
     const metricHints = metricNameList.slice(0, 60).map(cleanMetricName).join('、');
-    const prompt = `你是一个成熟的对话式数据分析 Agent 的“大脑”。你要理解用户真实意图，决定是否聊天、检索知识，还是调用数据工具。只返回严格 JSON，不要 Markdown，不要解释，不要 <think>。
+    const citySample = [...new Set(rawDataCache.city.slice(0,20).map(r=>r['地区']).filter(Boolean))].join('、');
+    const prompt = `你是一个成熟的对话式数据分析 Agent 的”大脑”。你要理解用户真实意图，决定是否聊天、检索知识，还是调用数据工具。只返回严格 JSON，不要 Markdown，不要解释，不要 <think>。
 
 可用工具：
 - trend_analysis: 趋势/历年/近N年/变化/趋势图
@@ -1655,7 +2288,7 @@ async function llmPlanSingleAgent(question, entities, recentHistory = [], lastMe
 - get_ranking: 排名/前N/最高/最低
 - compare: 两个地区或两个年份对比
 - point_query: 某地区某年份某指标具体值
-- evidence_chat: 解释、评价、原因、建议、开放式分析，需要结合本地知识/向量库
+- evidence_chat: 解释、评价、原因、建议、开放式分析；以及一切涉及已入库报告/白皮书/文献/名单内容的问题（如"报告里说了什么""白皮书的结论""指数怎么构建的""某人才称号的条件"等）
 - chat: 普通交流、打招呼、闲聊、能力说明
 
 工具参数：
@@ -1668,12 +2301,15 @@ point_query {"metric":string,"region":string,"year":number}
 决策原则：
 1. 优先理解用户原话，不要只按关键词死板匹配。
 2. 用户要数据、图表、导出、报告时，必须选合适工具，不要闲聊。
-3. 用户问“为什么/怎么看/评价/建议/总结”且不是明确数值任务，选 evidence_chat。
-4. 用户说“那这个呢/同样/换成/继续”时，要结合上下文继承指标、地区和上一轮任务。
-5. 没有地区但问题指全国整体，region 填“全国”；确实没说地区且适合全国，也填“全国”。
+3. 用户问”为什么/怎么看/评价/建议/总结”且不是明确数值任务，选 evidence_chat。用户提到报告、白皮书、文献、指数构建方法、人才称号条件、名单内容等，一律选 evidence_chat。
+4. 用户说”那这个呢/同样/换成/继续”时，要结合上下文继承指标、地区和上一轮任务。
+5. 没有地区但问题指全国整体，region 填”全国”；确实没说地区且适合全国，也填”全国”。
 6. 不要编造指标；可用指标示例里没有完全匹配时，选择最接近的指标。
+7. 用户问”各省/全国各地/省份对比/发展情况/排名”这类覆盖所有省份的问题，优先选 get_ranking，不要选 evidence_chat（RAG 只能返回部分省份的片段，会导致数据不全）。
+8. 问题涉及中国以外的国家/地区（如德国、美国、全球、国际对比等），不要选 chat 拒绝，应选 evidence_chat——知识文档库中收录了全球指数报告和白皮书，可能包含相关内容。
 
 可用指标示例：${metricHints}
+地级市数据（部分城市）：${citySample}（查询地级市时 region 填城市全名）
 已识别实体：${JSON.stringify(entities)}
 上一轮方法摘要：${lastMethod ? JSON.stringify(lastMethod).slice(0, 900) : '无'}
 最近对话：
@@ -1700,40 +2336,108 @@ ${historyHint || '无'}
 
 async function synthesizeConversationalAnswer(question, draftAnswer, context = {}) {
     if (!draftAnswer || String(draftAnswer).length < 12) return draftAnswer;
-    if (context.resultType === 'ranking' || context.resultType === 'point') {
+    // ranking / point / trend 草稿已完整，不走 LLM 润色（防止丢失年份/数值）
+    if (context.resultType === 'ranking' || context.resultType === 'point' || context.resultType === 'trend') {
         return draftAnswer;
     }
-    const prompt = `你是山东财经大学科研教育人才数据平台的成熟 AI 分析助手。请基于“工具结果草稿”生成自然、清晰、有交流感的最终回答。
+    // forecast / compare：只有当有报告证据时才走 LLM 润色（丰富背景解读）
+    // 没有报告证据时直接用草稿，避免 LLM 意外改写预测数字或置信区间
+    const hasReportEvidence = Array.isArray(context.reportEvidence) && context.reportEvidence.length > 0;
+    if ((context.resultType === 'forecast' || context.resultType === 'compare') && !hasReportEvidence) {
+        return draftAnswer;
+    }
+
+    // 并联报告证据片段，并生成可跳转来源提示
+    const reportEvidence = context.reportEvidence || [];
+    const reportSnippets = reportEvidence
+        .slice(0, 6)
+        .map((d, i) => {
+            const filename = d.metadata?.filename || d.metadata?.source || '';
+            const page = d.metadata?.page ? `第${d.metadata.page}页` : '';
+            const section = d.metadata?.section ? `§${d.metadata.section}` : '';
+            const src = [filename, page, section].filter(Boolean).join(' ');
+            return `[报告${i + 1}${src ? ' · ' + src : ''}] ${String(d.text || '').slice(0, 600)}`;
+        })
+        .join('\n');
+    // 构建来源索引，供 LLM 在回答末尾引用
+    const sourceIndex = reportEvidence
+        .slice(0, 6)
+        .map((d, i) => {
+            const filename = d.metadata?.filename || d.metadata?.source || '';
+            const page = d.metadata?.page;
+            const section = d.metadata?.section || '';
+            const url = filename ? `/资料/${encodeURIComponent(filename)}${page ? `#page=${page}` : ''}` : '';
+            return { filename, page, section, url };
+        })
+        .filter(s => s.filename);
+    const sourceHint = sourceIndex.length
+        ? `\n可引用来源（在回答末尾用"📄 来源：《文件名》第N页"格式标注，如有URL可附链接）：\n` +
+          sourceIndex.map((s, i) => `  [${i + 1}] 《${s.filename.replace(/\.pdf$/i, '')}》${s.page ? '第' + s.page + '页' : ''}${s.section ? ' §' + s.section : ''} ${s.url ? '(' + s.url + ')' : ''}`).join('\n')
+        : '';
+    const reportSection = reportSnippets
+        ? `\n相关报告/文献内容（保留所有数字和数据，尽量引用原文）：\n${reportSnippets}\n${sourceHint}`
+        : '';
+
+    const prompt = `你是山东财经大学科研教育人才数据平台的成熟 AI 分析助手。请基于”工具结果草稿”生成自然、清晰、有交流感的最终回答。
 
 要求：
 1. 必须忠实于工具结果，不要新增未给出的数值、年份、地区、排名。
 2. 保留关键表格、数值、方法、置信区间和数据来源含义。
-3. 语气像专业助手，不要模板腔，不要说“修复/工具调用完成/后台”等技术提示。
-4. 如果结果显示数据缺失，要直接说明缺什么，并给出下一步可问法。
-5. 不要主动引导用户询问数据库或向量库没有覆盖的主题，例如行业数据、国外/其他国家数据、企业数据、学校明细等，除非工具结果或证据明确提供。
+3. 如果提供了相关报告内容，可以引用其中的分析背景、政策解读或方法说明来丰富回答，但不要用报告内容替换或矛盾于工具数值。
+4. 语气像专业助手，不要模板腔，不要说”修复/工具调用完成/后台”等技术提示。
+5. 如果结果显示数据缺失，要直接说明缺什么，并给出下一步可问法。
 6. 追问建议只能围绕当前平台已有口径：全国、省份、地级市、年份、已存在指标、趋势、排名、对比、预测、方法说明。
 7. 中文回答，结构清楚，适度简洁。
+8. 列举多个要点时，使用"一、二、三"或"①②③"等中文序号，不要使用"1. 2. 3."的 Markdown 有序列表格式（前端不渲染 Markdown）。
+9. 如果回答用到了报告内容，在回答末尾单独一行标注来源，格式：📄 来源：《报告名》第N页。如提供了 URL，格式为：📄 来源：《报告名》第N页（/资料/文件名.pdf#page=N）。最多标注3个来源。
 
 用户问题：${question}
 工具与方法轨迹：${JSON.stringify(context.toolTrace || []).slice(0, 1200)}
 证据来源：${JSON.stringify(context.citations || []).slice(0, 900)}
+${reportSection}
 工具结果草稿：
 ${String(draftAnswer).slice(0, 5000)}
 
 请输出最终回答正文：`;
     try {
         const raw = await generateSync(prompt, 60000);
-        const cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-        if (cleaned && cleaned.length >= 10 && !/^```/.test(cleaned)) return sanitizeUnsupportedFollowups(cleaned);
+        const cleaned = fixNumberedList(raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim());
+        const hasReportEvidence = (context.reportEvidence || []).length > 0;
+        if (cleaned && cleaned.length >= 10 && !/^```/.test(cleaned)) return sanitizeUnsupportedFollowups(cleaned, hasReportEvidence);
     } catch (err) {
         console.warn('最终表达层不可用，使用工具草稿:', err.message);
     }
-    return draftAnswer;
+    return fixNumberedList(draftAnswer);
 }
 
-function sanitizeUnsupportedFollowups(answer) {
+/** 把 LLM 生成的 Markdown 有序列表（全为 1.）转为中文序号，前端不渲染 Markdown */
+function fixNumberedList(text) {
+    if (!text) return text;
+    const CN = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+                 '十一', '十二', '十三', '十四', '十五'];
+    // 逐行处理：遇到 "数字. " 开头的行，按块内顺序编号
+    const lines = text.split('\n');
+    let counter = 0;
+    const result = lines.map(line => {
+        if (/^\d+\.\s+/.test(line)) {
+            const cn = CN[counter] !== undefined ? `${CN[counter]}、` : `${counter + 1}、`;
+            counter++;
+            return line.replace(/^\d+\.\s+/, cn + ' ');
+        }
+        // 空行重置计数器（新列表块重新从"一"开始）
+        if (line.trim() === '') counter = 0;
+        return line;
+    });
+    return result.join('\n');
+}
+
+function sanitizeUnsupportedFollowups(answer, isKnowledgeAnswer = false) {
+    // 知识文档回答不过滤（白皮书/报告本身包含国际/企业等内容）
+    if (isKnowledgeAnswer) return String(answer || '').replace(/\n{3,}/g, '\n\n').trim();
     const lines = String(answer || '').split(/\n/);
-    const blocked = /(行业|汽车|电子|其他国家|国外|国际|同期国家|企业|公司|学校明细|院校名单)/;
+    // 只过滤"平台不支持的追问建议"短语，而非内容词
+    // 避免把"汽车行业"、"电子产业"等合法回答内容误删
+    const blocked = /(?:平台暂不支持|平台不支持查询|暂不支持该指标|不在平台数据范围|超出平台数据范围|建议前往.*官方网站|建议查阅.*官网|具体院校名单|具体公司.*列表|具体企业.*列表)/;
     return lines
         .filter(line => !blocked.test(line))
         .join('\n')
@@ -1741,25 +2445,77 @@ function sanitizeUnsupportedFollowups(answer) {
         .trim();
 }
 
+// ── 上下文感知建议生成 ────────────────────────────────────────
+function buildContextualSuggestions(question, tool = 'chat') {
+    const q = String(question);
+    const latestYear = getLatestYear(rawDataCache.province) || 2024;
+
+    // 人才计划 / 学者类
+    if (/(杰青|优青|长江学者|万人|千人|百人|人才计划|院士|杰出|拔尖|青年托举)/.test(q)) {
+        return [
+            `${latestYear}年各省杰青数量排名`,
+            `近5年长江学者数量趋势`,
+            `${latestYear}年各省优青数量对比`,
+            '山东省人才计划入选情况'
+        ];
+    }
+    // 高校 / 教育类
+    if (/(高校|大学|院校|学生|教师|专任|在校生|录取|教育)/.test(q)) {
+        return [
+            `预测${latestYear + 2}年全国普通高校数量`,
+            `${latestYear}年各省普通高校数量排名`,
+            '近10年全国高校数量趋势',
+            '江苏和浙江高校数量对比'
+        ];
+    }
+    // 科研 / 专利 / R&D
+    if (/(专利|科研|R&D|研发|发明|论文|科技|创新)/.test(q)) {
+        return [
+            `${latestYear}年各省发明专利授予数排名`,
+            '近5年全国R&D经费趋势',
+            `${latestYear}年科学支出水平各省对比`,
+            '广东和江苏专利数量对比'
+        ];
+    }
+    // 经济 / 产业类
+    if (/(GDP|产业|经济|工业|制造|机器人|数字化|互联网)/.test(q)) {
+        return [
+            '全国工业机器人密度近10年趋势',
+            `${latestYear}年各省产业结构高级化排名`,
+            '江苏和浙江科研指标对比',
+            '预测2026年全国互联网普及度'
+        ];
+    }
+    // evidence_chat 通用追问建议
+    if (tool === 'evidence_chat') {
+        return ['换一个省份继续查询', `指定${latestYear}年重新分析`, '查看该指标近5年趋势', '对比两个省份的差异'];
+    }
+    // chat 默认建议
+    return [
+        `${latestYear}年各省杰青数量前10排名`,
+        `预测${latestYear + 2}年全国普通高校数量`,
+        '近5年长江学者趋势',
+        '江苏和浙江R&D投入对比'
+    ];
+}
+
 async function answerGeneralChat(question, recentHistory = []) {
     const latestYear = getLatestYear(rawDataCache.province);
     const historyHint = Array.isArray(recentHistory)
         ? recentHistory.slice(-6).map(h => `${h.role === 'user' ? '用户' : '助手'}: ${String(h.content || '').slice(0, 160)}`).join('\n')
         : '';
-    const prompt = `你是山东财经大学科研教育人才数据平台里的 AI 分析助手。请自然交流，但要清楚告诉用户你可以调用数据工具。
+    const hasHistory = historyHint && historyHint.length > 0;
+    const prompt = `你是山东财经大学科研教育人才数据平台的数据分析助手，直接、简洁地回答用户问题。
 
-你的真实能力：
-- 查询省份、地级市、全国数据
-- 做趋势、排名、对比、预测、散点关联
-- 解释方法、生成报告、导出图表/表格
-- 使用 Chroma 向量库和本地数据检索，检索不足时会纠错重查
+规则：
+- 不要自我介绍，不要列举自己的能力
+- 如果是追问上一个问题（如"单位是什么""能详细说说吗"），直接基于对话上下文回答
+- 如果是新的数据需求，简短确认后调用工具
+- 如果是闲聊，用一两句话回应，不要展开介绍
+- 不编造数据
 
-不要编造具体数据。用户如果只是闲聊，可以简短回应并顺势引导他提出数据问题。
-
-最新数据年份：${latestYear || '未知'}
-指标数量：${metricNameList.length}
-最近对话：
-${historyHint || '无'}
+最新数据年份：${latestYear || '未知'}，指标数量：${metricNameList.length}个
+${hasHistory ? `最近对话：\n${historyHint}` : ''}
 
 用户：${question}
 助手：`;
@@ -1773,7 +2529,7 @@ ${historyHint || '无'}
                 citations: [],
                 reasoning: ['意图: chat', '模式: 对话交流', '策略: 不编造数据，引导调用工具'],
                 confidence: 0.88,
-                suggestions: ['预测2026年山东省普通高校数量', '全国工业机器人密度近10年趋势', '2024年各省发明专利授予数排名', '江苏和浙江科研指标对比'],
+                suggestions: buildContextualSuggestions(question, 'chat'),
                 toolTrace: [{ tool: 'chat', normalizedTool: 'chat', params: {}, success: true, type: 'chat' }]
             };
         }
@@ -1781,7 +2537,7 @@ ${historyHint || '无'}
         console.warn('普通聊天模型不可用，使用固定能力介绍:', err.message);
     }
     return {
-        answer: `我在。你可以直接像正常聊天一样问我，也可以让我调用数据工具。\n\n比如：\n- 预测2026年山东省普通高校数量\n- 查看全国工业机器人密度2000到2023年的趋势\n- 对比江苏和浙江发明专利授予数\n- 生成某个指标的分析报告并导出`,
+        answer: `好的，请说。`,
         chart: null,
         citations: [],
         reasoning: ['意图: chat', '模型不可用时降级为能力说明'],
@@ -1796,22 +2552,15 @@ async function executeTool(decision, entities) {
     const tool = normalizeToolName(decision.tool);
     const params = decision.params || {};
 
-    // 全局地区名规范化（所有工具共用）
-    const _rm = {
-        '广东': '广东省', '江苏': '江苏省', '浙江': '浙江省', '山东': '山东省',
-        '北京': '北京市', '上海': '上海市', '天津': '天津市', '重庆': '重庆市',
-        '安徽': '安徽省', '福建': '福建省', '江西': '江西省', '河南': '河南省',
-        '湖北': '湖北省', '湖南': '湖南省', '四川': '四川省', '贵州': '贵州省',
-        '云南': '云南省', '陕西': '陕西省', '甘肃': '甘肃省', '海南': '海南省',
-        '辽宁': '辽宁省', '吉林': '吉林省', '黑龙江': '黑龙江省', '河北': '河北省',
-        '山西': '山西省', '内蒙古': '内蒙古自治区', '广西': '广西壮族自治区',
-        '西藏': '西藏自治区', '新疆': '新疆维吾尔自治区', '宁夏': '宁夏回族自治区',
-        '青海': '青海省'
-    };
-    const _nr = r => (!r || r === '全国') ? r : (_rm[r] || r);
+    // 全局地区名规范化（所有工具共用，引用模块级 REGION_MAP）
+    const _nr = r => (!r || r === '全国') ? r : (REGION_MAP[r] || r);
     if (params.region) params.region = _nr(params.region);
     if (params.regionA) params.regionA = _nr(params.regionA);
     if (params.regionB) params.regionB = _nr(params.regionB);
+    // ── 地级市判断：检查 region 是否在 city 表中 ────────────
+    const cityRegionSet = new Set(rawDataCache.city.map(r => r['地区']).filter(Boolean));
+    const isCityRegion = (r) => r && r !== '全国' && cityRegionSet.has(r);
+
     try {
         // ---- get_ranking ----
         if (tool === 'get_ranking') {
@@ -1819,8 +2568,13 @@ async function executeTool(decision, entities) {
             const year   = params.year   || entities.years[0]   || 0;
             const order  = ['desc','asc'].includes(params.order) ? params.order : 'desc';
             const topN   = parseInt(params.topN) || 10;
-            const data   = getRanking(metric, year, order, topN, params.table || 'province');
-            return { success: true, type: 'ranking', data };
+            // 自动检测是否为地级市排名
+            const table  = params.table === 'city'
+                || (params.region && isCityRegion(params.region))
+                || /(地级市|城市级|市级排名)/.test(String(decision._originalQuestion || ''))
+                ? 'city' : (params.table || 'province');
+            const data   = getRanking(metric, year, order, topN, table);
+            return { success: true, type: 'ranking', data, _table: table };
         }
 
         // ---- compare ----
@@ -1873,11 +2627,12 @@ async function executeTool(decision, entities) {
             const metric  = params.metric || entities.metrics[0] || metricNameList[0];
             const region  = params.region || entities.regions[0] || (entities._defaultNational ? '全国' : '全国');
             const isNational = region === '全国';
-            const rows    = isNational ? rawDataCache.national : rawDataCache.province;
+            const isCity  = !isNational && isCityRegion(region);
+            const rows    = isNational ? rawDataCache.national : isCity ? rawDataCache.city : rawDataCache.province;
             const year    = params.year   || entities.years[0]   || getLatestYear(rows);
             const realKey = findRealKey(rows, metric) || metric;
             const row     = rows.find(r => r['年份'] === year && (isNational || r['地区'] === region));
-            return { success: true, type: 'point', data: { region, metric, year, value: row ? row[realKey] : undefined } };
+            return { success: true, type: 'point', data: { region, metric, year, value: row ? row[realKey] : undefined, _table: isCity ? '地级市表' : isNational ? '全国表' : '省份表' } };
         }
 
         // ---- trend_analysis ----
@@ -1901,19 +2656,23 @@ async function executeTool(decision, entities) {
                     console.log(`trend_analysis(全国): "${metric}"→"${realKey}"`);
                     return {
                         success: true, type: 'trend',
-                        data: { region: '全国', metric, table: '全国表', chartData: filtered.map(r => ({ year: r['年份'], value: r[realKey] || 0 })), years: filtered.map(r => r['年份']) }
+                        data: { region: '全国', metric, table: '全国表', chartData: filtered.map(r => ({ year: r['年份'], value: r[realKey] ?? null })), years: filtered.map(r => r['年份']) }
                     };
                 }
             }
             
-            // 有指定省份 or 全国数据不足 → 用省份表
-            const allProvinces = [...new Set(rawDataCache.province.map(r => r['地区']))].filter(Boolean);
-            const region = params.region || entities.regions[0] || allProvinces[0] || '广东省';
+            // 有指定地区 → 判断地级市 or 省份
+            const regionParam = params.region || entities.regions[0];
+            const isCity = regionParam && isCityRegion(regionParam);
+            const sourceTable = isCity ? rawDataCache.city : rawDataCache.province;
+            const allRegions = [...new Set(sourceTable.map(r => r['地区']))].filter(Boolean);
+            const region = regionParam || allRegions[0] || '广东省';
             const requestedYears = (params.years && params.years.length) ? params.years
                                  : (entities.years && entities.years.length) ? entities.years : null;
-            const rows    = rawDataCache.province.filter(r => r['地区'] === region);
+            const rows    = sourceTable.filter(r => r['地区'] === region);
             const realKey = findRealKey(rows, metric) || metric;
-            console.log(`trend_analysis(省份): "${metric}"→"${realKey}", region="${region}"`);
+            const tableLabel = isCity ? '地级市表' : '省份表';
+            console.log(`trend_analysis(${tableLabel}): "${metric}"→"${realKey}", region="${region}"`);
             let filtered = rows;
             if (requestedYears && requestedYears.length) {
                 const f = rows.filter(r => requestedYears.includes(r['年份']));
@@ -1922,7 +2681,7 @@ async function executeTool(decision, entities) {
             filtered.sort((a, b) => a['年份'] - b['年份']);
             return {
                 success: true, type: 'trend',
-                data: { region, metric, table: '省份表', chartData: filtered.map(r => ({ year: r['年份'], value: r[realKey] || 0 })), years: filtered.map(r => r['年份']) }
+                data: { region, metric, table: tableLabel, chartData: filtered.map(r => ({ year: r['年份'], value: r[realKey] ?? null })), years: filtered.map(r => r['年份']) }
             };
         }
 
@@ -1941,7 +2700,8 @@ async function generateAnswer(result, question, type) {
     if (type === 'ranking') {
         const items = result.data;
         if (!items || !items.length) return { text: '未找到相关排名数据，请确认指标名称或年份是否正确。', citations: [] };
-        answer = `**排名结果**\n\n`;
+        if (items._yearFallback) answer += `> ⚠️ ${items._yearFallback}\n\n`;
+        answer += `**排名结果**\n\n`;
         items.forEach((item, i) => {
             answer += `${i+1}. **${item.region}**：${formatValue(item.value)}\n`;
             citations.push(`[来源: 省份表/${item.region}/第${i+1}名]`);
@@ -2025,7 +2785,7 @@ async function generateAnswer(result, question, type) {
     }
     else if (type === 'trend') {
         const { region, metric, chartData, table } = result.data;
-        const valid = chartData.filter(d => d.value > 0);
+        const valid = chartData.filter(d => d.value !== null && d.value !== undefined && !isNaN(d.value));
         if (valid.length < 2) {
             answer = `⚠️ ${region}的${metric}有效数据不足（${valid.length}年），无法分析趋势。`;
         } else {
@@ -2870,7 +3630,12 @@ ${question}
   "params": {参数对象},
   "clarification": "追问内容（action=ask_clarification时填写）",
   "rationale": "一句话说明决策原因",
-  "regions": ["如果涉及多个地区，列出所有地区名"]
+  "regions": ["如果涉及多个地区，列出所有地区名"],
+  "entities": {
+    "regions": ["从问题中识别的地区（省份全称或全国）"],
+    "metrics": ["从问题中识别的指标名（从可用指标里选，最多2个）"],
+    "years": [年份数字数组，如有]
+  }
 }`;
 
     try {
@@ -2888,7 +3653,7 @@ ${question}
 /**
  * 从LLM决策结果中规范化工具参数
  */
-function normalizeLLMDecision(decision, lastMethod = null) {
+function normalizeLLMDecision(decision, lastMethod = null, recentHistory = []) {
     if (!decision || decision.action !== 'call_tool') return null;
     const tool = normalizeToolName(decision.tool || '');
     const allowed = ['get_ranking','compare','forecast','point_query','trend_analysis','evidence_chat','chat'];
@@ -2916,9 +3681,9 @@ function normalizeLLMDecision(decision, lastMethod = null) {
     if (!params.order && tool === 'get_ranking') params.order = 'desc';
     if (!params.topN && tool === 'get_ranking') params.topN = 10;
 
-    // 补全缺失参数（从上一轮继承）
+    // 补全缺失参数（从上一轮继承，断链时从 history 回溯）
     if (!params.metric && lastMethod?.params?.metric) params.metric = lastMethod.params.metric;
-    if (!params.metric) params.metric = metricNameList[0] || '';
+    if (!params.metric) params.metric = inferMetricFromHistory(recentHistory) || metricNameList[0] || '';
     if (!params.region && tool !== 'get_ranking' && tool !== 'compare') {
         params.region = lastMethod?.params?.region || lastMethod?.regions?.[0] || '全国';
     }
@@ -2928,25 +3693,14 @@ function normalizeLLMDecision(decision, lastMethod = null) {
     if (!params.year && tool === 'get_ranking') params.year = latestYear;
 
     // 规范化地区名（短名 → 全称，与 extractEntities 保持一致）
-    const regionMap = {
-        '广东': '广东省', '江苏': '江苏省', '浙江': '浙江省', '山东': '山东省',
-        '北京': '北京市', '上海': '上海市', '天津': '天津市', '重庆': '重庆市',
-        '安徽': '安徽省', '福建': '福建省', '江西': '江西省', '河南': '河南省',
-        '湖北': '湖北省', '湖南': '湖南省', '四川': '四川省', '贵州': '贵州省',
-        '云南': '云南省', '陕西': '陕西省', '甘肃': '甘肃省', '海南': '海南省',
-        '辽宁': '辽宁省', '吉林': '吉林省', '黑龙江': '黑龙江省', '河北': '河北省',
-        '山西': '山西省', '内蒙古': '内蒙古自治区', '广西': '广西壮族自治区',
-        '西藏': '西藏自治区', '新疆': '新疆维吾尔自治区', '宁夏': '宁夏回族自治区',
-        '青海': '青海省'
-    };
     const normalizeRegion = r => {
         if (!r || r === '全国') return r;
-        if (regionMap[r]) return regionMap[r];
+        if (REGION_MAP[r]) return REGION_MAP[r];
         // 包含匹配：如 "山东省" 已经是全称直接返回
         const provinceList = [...new Set(rawDataCache.province.map(row => row['地区']))];
         if (provinceList.includes(r)) return r;
         // 短名包含匹配
-        for (const [short, full] of Object.entries(regionMap)) {
+        for (const [short, full] of Object.entries(REGION_MAP)) {
             if (r.includes(short)) return full;
         }
         return r;
@@ -2967,7 +3721,86 @@ function normalizeLLMDecision(decision, lastMethod = null) {
         if (matched) params.metric = matched;
     }
 
+    // LLM 返回 years=null 但问题含"近N年" → 强制补算年份数组，防止返回全部历史数据
+    if (tool === 'trend_analysis' && (!params.years || !params.years.length)) {
+        const orig = decision._originalQuestion || '';
+        const matchArabic  = orig.match(/近\s*(\d+)\s*年/);
+        const matchChinese = orig.match(/近([一二两三四五六七八九十百]+)年/);
+        if (matchArabic || matchChinese) {
+            const n = Math.max(2, Math.min(
+                matchArabic ? parseInt(matchArabic[1]) : (parseChineseNumber(matchChinese[1]) || 5),
+                30
+            ));
+            params.years = Array.from({ length: n }, (_, i) => latestYear - n + 1 + i);
+            console.log(`📅 "近${n}年"补算 years:`, params.years);
+        }
+    }
+
     return { tool, params, rationale: decision.rationale || '' };
+}
+
+// 全球/非中国地区关键词正则（模块级常量，供 runAgent 多处复用）
+const GLOBAL_COUNTRIES_RE = /德国|美国|日本|欧洲|全球|国际|英国|法国|韩国|亚洲|世界|海外|印度|俄罗斯|意大利|加拿大|澳大利亚|新加坡|荷兰|瑞典|芬兰|挪威|丹麦|瑞士|以色列|巴西|墨西哥|阿根廷|西班牙|葡萄牙|波兰|捷克|匈牙利|奥地利|比利时|土耳其|沙特|阿联酋|泰国|越南|马来西亚|印尼|菲律宾|南非|埃及/;
+
+// 知识文档国家过滤用数组（排除泛指词，只保留具体国家）
+// 与 knowledge_ingest.py COUNTRY_KEYWORDS 保持同步
+const KNOWLEDGE_SPECIFIC_COUNTRIES = [
+    '德国','美国','日本','英国','法国','韩国','印度','俄罗斯','意大利','加拿大',
+    '澳大利亚','新加坡','荷兰','瑞典','芬兰','挪威','丹麦','瑞士','以色列',
+    '巴西','墨西哥','阿根廷','西班牙','葡萄牙','波兰','捷克','匈牙利','奥地利',
+    '比利时','土耳其','沙特','阿联酋','泰国','越南','马来西亚','印尼','菲律宾',
+    '南非','埃及'
+];
+
+/**
+ * 短追问扩写："以色列呢" → "以色列的数字经济发展情况"
+ * 检测 "X呢/X呢？" 格式，从历史里找上一条实质性问题，把实体替换后重建完整问题。
+ * 避免短查询 embedding 语义信号不足导致召回跑偏。
+ */
+function expandShortFollowup(question, recentHistory) {
+    if (!/呢[？?]?\s*$/.test(question) || question.length > 15) return question;
+    const entity = question.replace(/呢[？?]?\s*$/, '').trim();
+    if (!entity || entity.length < 2) return question;
+
+    // 找历史里最近一条实质性用户问题
+    // 允许：不以"呢"结尾 OR 长度>10（复合问题如"法国的数字经济？以色列呢？"）
+    const prevQ = [...recentHistory]
+        .reverse()
+        .find(h => {
+            const t = String(h.content || '');
+            return h.role === 'user' && t.length > 4
+                && (!/呢[？?]?\s*$/.test(t) || t.length > 10);
+        });
+    if (!prevQ) {
+        // 无历史时：国家名 + 通用描述，至少提供基本语义信号
+        if (GLOBAL_COUNTRIES_RE.test(entity)) {
+            const expanded = `${entity}的发展情况和相关数据`;
+            console.log(`🔗 追问扩写（无历史）：「${question}」→「${expanded}」`);
+            return expanded;
+        }
+        return question;
+    }
+    // 复合问题只取第一个问句作为谓语参考（去掉"以色列呢？"之类的追问尾巴）
+    let prevText = String(prevQ.content || '').trim();
+    if (/呢[？?]?\s*$/.test(prevText)) {
+        prevText = prevText.split(/[？?]/)[0].trim() || prevText;
+    }
+
+    // 找上一条问题里的国家/地区实体（用于替换）
+    const allCountries = [...KNOWLEDGE_SPECIFIC_COUNTRIES, '中国', '全国', '欧洲', '亚洲', '全球'];
+    const prevCountry = allCountries.find(c => prevText.includes(c));
+
+    let expanded;
+    if (prevCountry) {
+        // 把上一条问题里的国家换成新实体
+        expanded = prevText.replace(new RegExp(prevCountry, 'g'), entity);
+    } else {
+        // 兜底：直接把实体拼到上一条问题前面
+        expanded = `${entity}的${prevText.replace(/^.*?[的关于]/, '')}`;
+    }
+    if (expanded === prevText || expanded === question) return question;
+    console.log(`🔗 追问扩写：「${question}」→「${expanded}」`);
+    return expanded;
 }
 
 /**
@@ -2975,18 +3808,24 @@ function normalizeLLMDecision(decision, lastMethod = null) {
  * 架构：LLM决策 → 工具执行 → Corrective RAG → 生成回答
  */
 async function runAgent(question, recentHistory = []) {
-    const q = question.trim();
+    let q = question.trim();
 
     // 历史压缩
     recentHistory = await compressHistoryIfNeeded(
         Array.isArray(recentHistory) ? recentHistory.slice(-MAX_HISTORY * 2) : []
     );
 
+    // 短追问扩写：把"以色列呢"还原成"以色列的数字经济发展情况"再走检索
+    q = expandShortFollowup(q, recentHistory);
+
     const lastMethod = getLastMethodSummary(recentHistory);
     const latestYear = getLatestYear(rawDataCache.province);
 
     // ── 平台事实类问题：直接从数据源返回，不走LLM ──────
     // 这类问题LLM无法准确回答，必须从真实数据读取
+
+    const metaAnswer = answerMetaQuery(q, recentHistory);
+    if (metaAnswer) return metaAnswer;
 
     const allMetricDetails = answerAllMetricDetails(q, buildMetricDetailEntitiesWithContext(q, recentHistory));
     if (allMetricDetails) return allMetricDetails;
@@ -3007,7 +3846,9 @@ async function runAgent(question, recentHistory = []) {
     }
 
     // 2. 年份覆盖 / 最新年份
-    if (/(最新.*年|哪.*年|覆盖.*年|数据.*年份|年份.*数据|最近.*年份|到.*哪年|数据.*到|截止|最新数据)/.test(q) && !/(预测|预计|趋势|近\d)/.test(q)) {
+    // 排除上下文引用型问句（"这是哪一年" "刚才那个" 等，应走 LLM + history 回答）
+    const isContextRef = /^(这|那|刚才|上面|之前|上一个|它|该).{0,8}(哪|什么|几)/.test(q) || /^(是|在)哪/.test(q);
+    if (!isContextRef && /(最新.*年|覆盖.*年|数据.*年份|年份.*数据|最近.*年份|到.*哪年|数据.*到|截止|最新数据|平台.*年|数据.*范围|年份.*范围)/.test(q) && !/(预测|预计|趋势|近\d)/.test(q)) {
         const allYears = [...new Set([...rawDataCache.national, ...rawDataCache.province].map(r => r['年份']).filter(Boolean))].sort();
         const minYear = allYears[0], maxYear = allYears[allYears.length - 1];
         return {
@@ -3056,7 +3897,6 @@ async function runAgent(question, recentHistory = []) {
     }
 
     // 6. 某指标是否存在 / 有没有XXX数据
-    const hasDataMatch = q.match(/(有没有|有.*数据|支持.*指标|能查.*吗|有.*指标)(.*?)(?:的数据|指标|数据)?$/);
     if (/(有没有|能查|支持查询|有.*的数据)/.test(q) && !/(趋势|排名|预测|对比|分析)/.test(q)) {
         const entities = extractEntities(q);
         const metric = entities.metrics[0];
@@ -3078,12 +3918,53 @@ async function runAgent(question, recentHistory = []) {
         return answerGeneralChat(q, recentHistory);
     }
 
+    // ── 短问题上下文扩展：极短追问（如"以色列呢"）用 history 推断主题 ──
+    if (q.length <= 14 && GLOBAL_COUNTRIES_RE.test(q) && recentHistory.length > 0) {
+        const lastUserMsg = recentHistory.slice().reverse().find(h => h.role === 'user');
+        if (lastUserMsg) {
+            const lastQ = String(lastUserMsg.content || '')
+                .replace(/（追问上下文：[\s\S]*?）\n?/, '')
+                .replace(/（追问关于[\s\S]*?）\n?/, '')
+                .trim();
+            // 从上一问题提取主题词（去掉国家名和语气词）
+            const topicPart = lastQ
+                .replace(GLOBAL_COUNTRIES_RE, '')
+                .replace(/^[的了吗呢啊是否？?。，,！!\s]+|[的了吗呢啊是否？?。，,！!\s]+$/g, '')
+                .trim()
+                .slice(0, 24);
+            if (topicPart.length >= 3) {
+                const countryMatch = q.match(GLOBAL_COUNTRIES_RE);
+                const country = countryMatch ? countryMatch[0] : '';
+                const expanded = country ? `${country}的${topicPart}` : q;
+                console.log(`🔍 短问题上下文扩展: "${q}" → "${expanded}"`);
+                q = expanded;
+            }
+        }
+    }
+
+    // ── 早期拦截：全球话题 / 报告查询 → 直接走 evidence_chat ──
+    // 必须在 llmDecideAction 之前，否则 LLM 可能误路由到结构化数据工具
+    const GLOBAL_QUERY_RE = GLOBAL_COUNTRIES_RE;
+    const REPORT_QUERY_RE = /报告|白皮书|文献|指数报告|研究报告|调研|发布的|根据.*报|按照.*报|第\d+页/;
+    if (GLOBAL_QUERY_RE.test(q) || REPORT_QUERY_RE.test(q)) {
+        console.log('🌐 全球话题/报告查询，跳过LLM路由直接走 evidence_chat:', q);
+        const entities = await extractEntitiesAsync(q, recentHistory);
+        return answerEvidenceChat(q, entities, recentHistory);
+    }
+
     // ── Step 1: LLM 决策 ──────────────────────────────
     const llmDecision = await llmDecideAction(q, recentHistory, lastMethod);
 
-    // LLM 要求追问
+    // LLM 要求追问——先判断是否能从知识文档回答，能则优先走 evidence_chat
     if (llmDecision?.action === 'ask_clarification') {
         const clarification = llmDecision.clarification || '请补充更多信息，例如具体地区、年份或指标。';
+        // 如果问题涉及非中国地区或全球话题，尝试从报告/白皮书回答
+        const mightBeInDocs = GLOBAL_COUNTRIES_RE.test(q) || /白皮书|报告|指数/.test(q);
+        if (mightBeInDocs) {
+            console.log('🔄 ask_clarification 转 evidence_chat（可能在知识文档中）:', q);
+            const entities = await extractEntitiesAsync(q, recentHistory, llmDecision);
+            return answerEvidenceChat(q, entities, recentHistory);
+        }
         console.log('❓ LLM要求追问:', clarification);
         return {
             answer: clarification,
@@ -3096,8 +3977,14 @@ async function runAgent(question, recentHistory = []) {
         };
     }
 
-    // LLM 决定直接聊天
+    // LLM 决定直接聊天——先判断是否能从知识文档回答
     if (llmDecision?.action === 'answer_directly' || llmDecision?.tool === 'chat') {
+        const mightBeInDocs = GLOBAL_COUNTRIES_RE.test(q) || /白皮书|报告|指数|文献/.test(q);
+        if (mightBeInDocs) {
+            console.log('🔄 chat 转 evidence_chat（可能在知识文档中）:', q);
+            const entities = await extractEntitiesAsync(q, recentHistory, llmDecision);
+            return answerEvidenceChat(q, entities, recentHistory);
+        }
         return answerGeneralChat(q, recentHistory);
     }
 
@@ -3110,22 +3997,8 @@ async function runAgent(question, recentHistory = []) {
 
     // LLM 决定调用 evidence_chat
     if (llmDecision?.tool === 'evidence_chat') {
-        const entities = await extractEntitiesAsync(q, recentHistory);
-        // 处理多地区（华东等）- 优先用LLM展开的regions
-        if (llmDecision.regions?.length > 0) {
-            const regionMap = {
-                '广东': '广东省', '江苏': '江苏省', '浙江': '浙江省', '山东': '山东省',
-                '北京': '北京市', '上海': '上海市', '天津': '天津市', '重庆': '重庆市',
-                '安徽': '安徽省', '福建': '福建省', '江西': '江西省', '河南': '河南省',
-                '湖北': '湖北省', '湖南': '湖南省', '四川': '四川省', '贵州': '贵州省',
-                '云南': '云南省', '陕西': '陕西省', '甘肃': '甘肃省', '海南': '海南省',
-                '辽宁': '辽宁省', '吉林': '吉林省', '黑龙江': '黑龙江省', '河北': '河北省',
-                '山西': '山西省', '内蒙古': '内蒙古自治区', '广西': '广西壮族自治区',
-                '西藏': '西藏自治区', '新疆': '新疆维吾尔自治区', '宁夏': '宁夏回族自治区',
-                '青海': '青海省'
-            };
-            entities.regions = llmDecision.regions.map(r => regionMap[r] || r);
-        }
+        // 复用 llmDecision.entities，跳过额外 LLM 提取
+        const entities = await extractEntitiesAsync(q, recentHistory, llmDecision);
         // 继承上一轮指标（上下文追问时实体提取可能为空）
         if (!entities.metrics.length && lastMethod?.params?.metric) {
             entities.metrics = [lastMethod.params.metric];
@@ -3138,12 +4011,12 @@ async function runAgent(question, recentHistory = []) {
     }
 
     // ── Step 2: 规范化工具决策 ────────────────────────
-    let toolDecision = normalizeLLMDecision({ ...llmDecision, _originalQuestion: q }, lastMethod);
+    let toolDecision = normalizeLLMDecision({ ...llmDecision, _originalQuestion: q }, lastMethod, recentHistory);
 
     // LLM决策失败，降级到规则
     if (!toolDecision) {
         console.warn('⚠️ LLM决策无效，降级到规则');
-        const entities = await extractEntitiesAsync(q, recentHistory);
+        const entities = await extractEntitiesAsync(q, recentHistory, null);
         // 补全实体继承
         if (!entities.metrics.length && lastMethod?.params?.metric) {
             entities.metrics = [lastMethod.params.metric];
@@ -3182,9 +4055,41 @@ async function runAgent(question, recentHistory = []) {
         return answerForecastComparison(q, entities_for_special);
     }
 
-    // ── Step 5: 执行工具 ──────────────────────────────────
-    const entities = await extractEntitiesAsync(q, recentHistory);
-    const result = await executeTool(toolDecision, entities);
+    // ── Step 5: 执行工具 + 并联 ChromaDB 检索（方案B）────────
+    // 复用 llmDecision.entities（若有）跳过额外 LLM 调用
+    const entities = await extractEntitiesAsync(q, recentHistory, llmDecision);
+    // 修正：LLM实体提取可能没有地区，此时应默认全国（而非随机取第一个省）
+    if (!entities.regions.length && !toolDecision.params?.region &&
+        !toolDecision.params?.regionA && !toolDecision.params?.regionB) {
+        entities._defaultNational = true;
+    }
+    const [result, reportEvidence] = await Promise.all([
+        executeTool(toolDecision, entities),
+        retrieveChromaEvidence(q, entities, 4).catch(() => [])
+    ]);
+
+    // ── Step 5.5: 指标找不到 → 给出候选提示，不展示空结果 ──
+    const reqMetric = toolDecision.params?.metric;
+    // 只有真正字段缺失才触发（年份降级不算缺失）
+    const hasNoData = result.success &&
+        ((result.type === 'ranking' && (!Array.isArray(result.data) || result.data.length === 0) && !result.data?._yearFallback) ||
+         (result.type === 'point'   && result.data.value === undefined) ||
+         (result.type === 'trend'   && (!result.data.chartData?.length || result.data.chartData.every(d => !d.value))));
+
+    if (hasNoData && reqMetric) {
+        const candidates = findFuzzyMetrics(reqMetric, 0.5).filter(m => m !== reqMetric).slice(0, 3);
+        const candidateHint = candidates.length
+            ? `\n\n平台中最接近的指标：\n${candidates.map((m, i) => `${i+1}. **${cleanMetricName(m)}**`).join('\n')}\n\n可以告诉我您想查的是哪个？`
+            : '\n\n请确认指标名称，或使用"有哪些指标"查看完整列表。';
+        return {
+            answer: `未找到指标「**${reqMetric}**」的数据。${candidateHint}`,
+            citations: [],
+            reasoning: [`指标未匹配: ${reqMetric}`, `候选: ${candidates.join('、') || '无'}`],
+            suggestions: candidates.length ? candidates.slice(0,2).map(m => `查看 ${cleanMetricName(m)} 数据`) : buildContextualSuggestions(q),
+            toolTrace: [{ tool: toolDecision.tool, params: toolDecision.params, success: false }],
+            confidence: 0.2
+        };
+    }
 
     // ── Step 6: 生成回答 ──────────────────────────────────
     const generated = await generateAnswer(result, q, result.type);
@@ -3230,7 +4135,8 @@ async function runAgent(question, recentHistory = []) {
         success: result.success,
         citations,
         toolTrace,
-        methodSummary
+        methodSummary,
+        reportEvidence
     });
 
     const suggestions = buildFollowupSuggestions(q, result, entities);
@@ -3275,6 +4181,8 @@ function splitCompoundQuestions(question) {
     const text = String(question || '').trim();
     if (!text) return [];
     if (text.length <= 18) return [text];
+    // 长文本且无问号 → 视为单一上下文输入（如粘贴的报告段落），不拆分
+    if (text.length > 300 && !/[？?]/.test(text)) return [text];
 
     if (/(预测|预计|未来).*(对比|比较|比对|vs|VS|差距|谁高|谁低)/.test(text)
         && detectMentionedRegions(text).length >= 2
@@ -3333,36 +4241,61 @@ function normalizePlannedTasks(plan, originalQuestion) {
         if (q.length > String(originalQuestion || '').length + 8) continue;
         if (!cleaned.includes(q)) cleaned.push(q);
     }
-    return cleaned.slice(0, 6);
+    // ── dedup：重叠度 > 60% 的 task 视为重复，保留先出现的 ──
+    const deduped = [];
+    for (const q of cleaned) {
+        const isDup = deduped.some(existing => {
+            const shorter = q.length < existing.length ? q : existing;
+            const longer  = q.length < existing.length ? existing : q;
+            // 计算短串在长串中的字符重叠比例
+            let overlap = 0;
+            for (const ch of shorter) { if (longer.includes(ch)) overlap++; }
+            return overlap / Math.max(shorter.length, 1) > 0.6;
+        });
+        if (!isDup) deduped.push(q);
+    }
+    return deduped.slice(0, 6);
 }
 
 function looksLikeCompoundQuestion(question) {
     const q = String(question || '');
     if (!q.trim()) return false;
+    // 长文本（>200字）且无问号 → 粘贴的段落内容，不拆分
+    if (q.length > 200 && !/[？?]/.test(q)) return false;
+    // 明显的编号列表结构 → 拆分
     if (/(^|[。；;！？?\n\r])\s*(?:第?\d+\s*[\.、，,)]|[（(]\d+[）)])/.test(q)) return true;
-    const intentHits = (q.match(/预测|预估|未来|趋势|走势|排名|前\d+|对比|比较|比对|多少|是多少|评价|分析/g) || []).length;
+    // 显式连接词 → 强信号，直接拆分
+    if (/另外|还有|顺便|再帮我|再看|再查|再分析/.test(q)) return true;
+    // intent 词命中 ≥ 3（避免"趋势分析"之类的单意图问题触发）
+    // 去掉过于泛化的词："分析"、"未来"、"多少"、"是多少"
+    const intentHits = (q.match(/预测|预估|趋势|走势|排名|前\d+|对比|比较|比对|评价/g) || []).length;
     const metricHits = extractEntities(q).metrics.length;
-    return intentHits >= 2 || metricHits >= 2 || /另外|还有|并且|同时|顺便|以及|再帮我|再看|再查|再分析/.test(q);
+    // 需要 intentHits >= 3，或 intentHits >= 2 且 metricHits >= 2（不同指标不同意图）
+    return (intentHits >= 3) || (intentHits >= 2 && metricHits >= 2);
 }
 
 async function planCompoundQuestions(question, history = []) {
-    const text = String(question || '').trim();
+    // 追问前缀不参与复合问题检测，只取实际问题部分
+    const raw = String(question || '').trim();
+    const followupMatch = raw.match(/^（追问(?:关于之前的回答：「[\s\S]*?」|上下文：[\s\S]*?)）\n?([\s\S]+)$/);
+    const text = followupMatch ? followupMatch[1].trim() : raw;
     const fallback = splitCompoundQuestions(text);
     if (!looksLikeCompoundQuestion(text)) return fallback;
 
     const metricHints = metricNameList.slice(0, 40).join('、');
     const historyHint = Array.isArray(history)
-        ? history.slice(-4).map(h => `${h.role === 'user' ? '用户' : '助手'}: ${String(h.content || '').slice(0, 120)}`).join('\n')
+        ? history.slice(-8).map(h => `${h.role === 'user' ? '用户' : '助手'}: ${String(h.content || '').slice(0, 120)}`).join('\n')
         : '';
-    const prompt = `你是科研教育人才数据平台的“问题任务规划器”。请把用户的一次输入拆成可以独立执行的数据分析子任务，只返回严格 JSON。
+    const prompt = `你是科研教育人才数据平台的”问题任务规划器”。请把用户的一次输入拆成可以独立执行的数据分析子任务，只返回严格 JSON。
 
 要求：
 1. 不要回答问题，只做任务拆解。
-2. 如果一句话包含不同意图或不同指标，例如“预测山东高校数量。给我广东机器人密度趋势”，必须拆成多个 task。
-3. 如果是同一指标同一意图的多地区问题，例如“分别预测广东、山东、山西2025年高校数量”，保留为一个 task。
-4. 如果是“预测山东并和江苏比对”这种同一指标的预测对比，也保留为一个 task。
-5. task.question 必须是用户原意的自然语言短句，不要补造数据，不要合并不同指标。
-6. 最多 6 个任务。
+2. 如果是单一指标、单一意图的问题（例如”近5年杰青数量趋势”、”山东AI人才趋势分析”），必须保留为 1 个 task，不得拆分。
+3. 如果一句话包含不同意图或不同指标，例如”预测山东高校数量。给我广东机器人密度趋势”，必须拆成多个 task。
+4. 如果是同一指标同一意图的多地区问题，例如”分别预测广东、山东、山西2025年高校数量”，保留为一个 task。
+5. 如果是”预测山东并和江苏比对”这种同一指标的预测对比，也保留为一个 task。
+6. task.question 必须是用户原意的自然语言短句，不要补造数据，不要合并不同指标。
+7. 最多 6 个任务。拿不准时宁可少拆，不可过拆。
 
 可用指标示例：${metricHints}
 最近上下文：
@@ -3423,8 +4356,8 @@ async function runAgentBatch(question, history = []) {
     }
 
     const answer = results.map((item, index) => {
-        return `### 问题 ${index + 1}：${item.question}\n\n${item.result.answer || '未生成回答'}`;
-    }).join('\n\n---\n\n');
+        return `【问题${index + 1}】${item.question}\n\n${item.result.answer || '未生成回答'}`;
+    }).join('\n\n' + '─'.repeat(20) + '\n\n');
     const citations = [...new Set(results.flatMap(item => item.result.citations || []))].slice(0, 12);
     const reasoning = [
         `识别到 ${parts.length} 个子问题，已逐项分析`,
@@ -3477,6 +4410,79 @@ app.post('/api/agent', async (req, res) => {
     }
 });
 
+// ── 流式 SSE 端点 ──────────────────────────────────────────────
+app.post('/api/agent/stream', async (req, res) => {
+    const { question, sessionId } = req.body || {};
+    const questionError = validateQuestion(question);
+    if (questionError) return res.status(400).json({ error: questionError });
+    const cleanSessionId = sanitizeSessionId(sessionId);
+    if (!cleanSessionId) return res.status(400).json({ error: 'sessionId格式不合法' });
+
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    });
+
+    const send = (obj) => {
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    };
+
+    // 进度状态事件（在 runAgentBatch 运行期间驱动进度条）
+    const steps = ['正在分析问题…', '查找数据中…', '调用数据工具…', '组织回复…'];
+    let stepIdx = 0;
+    send({ type: 'status', step: stepIdx, text: steps[stepIdx] });
+    const statusTimer = setInterval(() => {
+        stepIdx = Math.min(stepIdx + 1, steps.length - 1);
+        send({ type: 'status', step: stepIdx, text: steps[stepIdx] });
+    }, 1400);
+
+    try {
+        const history = getSessionHistory(cleanSessionId);
+        const result = await runAgentBatch(question.trim(), history);
+        clearInterval(statusTimer);
+
+        // 流式推送答案文字（4字一批，10ms 间隔 ≈ 400字/秒，视觉流畅）
+        const answer = String(result.answer || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+        const chunks = answer.match(/[\s\S]{1,4}/g) || [];
+        for (const chunk of chunks) {
+            send({ type: 'token', text: chunk });
+            await new Promise(r => setTimeout(r, 8));
+        }
+
+        // 推送元数据（reasoning/citations/suggestions/chart 等）
+        send({
+            type: 'done',
+            reasoning:    result.reasoning    || [],
+            citations:    result.citations    || [],
+            suggestions:  result.suggestions  || [],
+            toolTrace:    result.toolTrace    || [],
+            chart:        result.chart        || null,
+            confidence:   result.confidence   || null,
+            wantsTable:   result.wantsTable   || false,
+            wantsScatter: result.wantsScatter || false,
+            tableSheet:   result.tableSheet   || null,
+            methodSummary: result.methodSummary || null,
+            confidenceInterval: result.confidenceInterval || null
+        });
+
+        pushSessionHistory(cleanSessionId, 'user', question.trim());
+        pushSessionHistory(cleanSessionId, 'assistant', result.answer, {
+            methodSummary: result.methodSummary || null,
+            toolTrace: result.toolTrace || [],
+            confidenceInterval: result.confidenceInterval || null,
+            citations: result.citations || []
+        });
+    } catch (err) {
+        clearInterval(statusTimer);
+        console.error('Stream Agent 错误:', err);
+        send({ type: 'error', text: err.message || '生成失败，请重试' });
+    } finally {
+        if (!res.writableEnded) res.end();
+    }
+});
+
 app.post('/api/clear_history', (req, res) => {
     const cleanSessionId = sanitizeSessionId(req.body?.sessionId);
     if (!cleanSessionId) return res.status(400).json({ error: 'sessionId格式不合法' });
@@ -3526,21 +4532,30 @@ app.post('/api/scatter', async (req, res) => {
 async function buildBM25Index() {
     if (!collection) return;
     try {
-        const count = await collection.count();
-        if (!count) return;
-
-        const BATCH = 500;
-        let docs = [];
-        for (let offset = 0; offset < count; offset += BATCH) {
-            const batch = await collection.get({ limit: BATCH, offset });
-            if (batch.documents?.length) docs.push(...batch.documents);
+        // 只索引知识文档（table=knowledge），避免把 51476 条结构化数据也拉进来
+        const BATCH = 200;
+        let docs = [], offset = 0;
+        while (true) {
+            const batch = await collection.get({
+                where: { table: { '$eq': 'knowledge' } },
+                limit: BATCH,
+                offset,
+                include: ['documents']
+            });
+            if (!batch.documents?.length) break;
+            docs.push(...batch.documents);
+            offset += batch.documents.length;
+            if (batch.documents.length < BATCH) break;
         }
 
-        if (!docs.length) return;
+        if (!docs.length) {
+            console.log('⚠️ BM25：知识文档为空，跳过索引构建');
+            return;
+        }
         bm25Index = new FlexSearch.Index({ tokenize: 'full' });
         docs.forEach((doc, idx) => { bm25Index.add(idx, doc); });
         allDocuments = docs;
-        console.log(`✅ BM25 索引构建完成 (${docs.length}条)`);
+        console.log(`✅ BM25 索引构建完成 (${docs.length} 条知识文档)`);
     } catch (e) { console.warn('BM25 构建失败:', e.message); }
 }
 
