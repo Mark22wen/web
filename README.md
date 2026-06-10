@@ -31,7 +31,7 @@
 本平台是一个面向高校科研管理场景的**数智化数据分析平台**，主要功能：
 
 - **数据看板**：以 ECharts 可视化展示全国/省份/地级市科研教育指标（普通高校数量、工业机器人密度、杰青/长江学者等 30+ 指标）
-- **AI 数据分析助手**：自然语言问答，支持趋势分析、排名、区域对比、预测（ARIMA/线性/指数平滑/霍尔特）、复合问题拆解
+- **AI 数据分析助手**：自然语言问答，支持趋势分析、排名、区域对比、预测（线性回归 / Holt 指数平滑 / 平均漂移外推 / 近年移动均值）、复合问题拆解
 - **知识检索（RAG）**：基于 ChromaDB + FlexSearch 的混合检索，支持报告/白皮书语义问答
 - **数据导出**：图表 PNG 导出、数据 Excel 导出、对话内容 DOCX 报告导出
 
@@ -74,7 +74,7 @@ rag-backend/
 **说明：**
 - `data.json` 由外部 ETL 脚本生成，格式见第 8 节。平台启动时一次性加载进内存。
 - `public/资料/` 下的 PDF 通过 Express 静态文件服务直接暴露，无需额外路由。
-- `sharp` 包虽在 node_modules 中但未被代码引用，可忽略或删除。
+- `data.json` 由 `convert_to_json.py` 生成，约 20 MB，包含全国/省份/地级市三张表的完整数据。
 
 ---
 
@@ -109,7 +109,7 @@ cd public
 python convert_to_json.py
 ```
 
-生成 `data.json`（约几 MB），放于项目根目录。这是平台图表和 AI 数据分析的数据来源，**只需生成一次**，数据更新时重新运行。
+生成 `data.json`（约 20 MB），放于项目根目录。这是平台图表和 AI 数据分析的数据来源，**只需生成一次**，数据更新时重新运行。
 
 ---
 
@@ -167,7 +167,7 @@ python url_ingest.py
 
 ```bash
 python check_chroma.py
-# 输出示例：✅ ChromaDB 连接正常，总量: 2840 条
+# 输出示例：✅ ChromaDB 连接正常，总量: N 条（以实际为准）
 ```
 
 ---
@@ -246,9 +246,9 @@ npm install
 | flexsearch | ^0.8 | BM25 全文检索 |
 | simple-statistics | ^7.8 | 统计函数（回归、相关性） |
 | ollama | ^0.6 | Ollama 本地 LLM 接口 |
-| uuid | ^14 | 会话 ID 生成 |
-| natural | ^8.1 | NLP 辅助（分词等） |
-| @xenova/transformers | ^2.17 | 本地嵌入模型（ChromaDB 向量化，可选） |
+| uuid | ^14 | 会话 ID 生成（预留依赖） |
+| natural | ^8.1 | NLP 辅助（预留依赖，当前主要用 DeepSeek/Ollama） |
+| @xenova/transformers | ^2.17 | 本地嵌入模型（预留依赖，当前嵌入走 Ollama bge-m3） |
 
 ---
 
@@ -353,7 +353,7 @@ chroma run --path ./chroma_db
 | 名单类 Excel（`.xlsx`） | `public/资料/PDF名单/` | 由 `knowledge_ingest.py` 以"整行描述"格式读取，作为知识文档入库 |
 | 网页文章（可选） | 无本地文件 | `url_ingest.py` 爬取后写入 ChromaDB，与本地文档共用同一集合 |
 
-> 具体入库了哪些文件、共多少条 chunk，可运行 `python check_chroma.py` 查看（示例输出：`✅ ChromaDB 连接正常，总量: 2840 条`）。
+> 具体入库了哪些文件、共多少条 chunk，可运行 `python check_chroma.py` 查看（示例输出：`✅ ChromaDB 连接正常，总量: N 条（以实际为准）`）。
 
 #### 未处理的资料
 
@@ -387,9 +387,9 @@ npm test
 🚀 服务启动 → http://localhost:3001
 🤖 推理引擎: DeepSeek API (deepseek-chat)
 📊 共加载 71 个指标：科学支出水平、工业机器人密度...
-✅ 本地混合知识索引构建完成 (18420条)
-✅ ChromaDB 知识库已连接: patent_knowledge / 2840 条
-✅ BM25 索引构建完成 (2840 条知识文档)
+✅ 本地混合知识索引构建完成 (N条，取决于 data.json 数据量)
+✅ ChromaDB 知识库已连接: patent_knowledge / N 条（取决于已入库文档数量）
+✅ BM25 索引构建完成 (N 条知识文档)
 ✅ 就绪，等待提问...
 ```
 
@@ -425,7 +425,7 @@ npm test
 将 RAG 扩展为能操作结构化数据的 Agent 系统：
 - `llmDecideAction` 决策函数替代纯关键词路由
 - 新增 `executeTool` 执行六种数据工具（趋势/排名/对比/预测/单点/相关性）
-- 四种预测算法（ARIMA、线性回归、指数平滑、Holt）
+- 四种预测算法（线性回归、Holt 指数平滑、平均漂移外推、近年移动均值）
 - 复合问题拆解（`planCompoundQuestions` + `runAgentBatch`）
 
 ### 第四阶段：体验优化
@@ -576,14 +576,14 @@ else：
 
 ### 预测算法（四选最优）
 
-对每个预测问题并行跑四种方法，选 AIC 最低者作为推荐结果：
+对每个预测问题并行跑四种方法，选残差最小者作为推荐结果：
 
 | 方法 | 适用场景 |
 |------|----------|
-| 线性回归 | 稳定增长/下降趋势 |
-| 指数平滑（Holt-Winters） | 有趋势无季节性 |
-| ARIMA(1,1,0) | 差分平稳序列 |
-| 霍尔特双参数 | 趋势变化较平缓 |
+| 线性回归趋势 | 稳定增长/下降趋势 |
+| Holt 线性指数平滑 | 有趋势、近期数据权重高 |
+| 平均漂移外推 | 逐年变化量稳定 |
+| 近年移动均值趋势 | 短期波动较大、近年数据更可信 |
 
 ---
 

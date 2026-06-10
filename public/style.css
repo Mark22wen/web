@@ -3165,6 +3165,7 @@ body.sdufe-cover-active #chat-float-btn{
   line-height:1.02;
   letter-spacing:.04em;
   color:#102b4f;
+  white-space:nowrap;
 }
 .sdufe-cover p{
   margin:18px 0 34px;

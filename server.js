@@ -1060,7 +1060,7 @@ function chooseForecastModel(data, targetYear, metric = '') {
         return ar - br;
     });
 
-    const best = scored[0] || candidates[2];
+    const best = scored[0] || { value: null, method: 'insufficient', methodLabel: '数据不足', methodReason: '所有预测方法均返回无效值', backtest: null };
     return {
         value: best.value,
         method: best.method,
@@ -1143,7 +1143,7 @@ function extractEntities(question) {
         }
     }
     const provinceList = [...new Set(rawDataCache.province.map(r => r['地区']))];
-    for (const p of provinceList) { if (question.includes(p)) entities.regions.push(p); }
+    for (const p of provinceList) { if (question.includes(p) && !entities.regions.includes(p)) entities.regions.push(p); }
     for (const [short, full] of Object.entries(REGION_MAP)) {
         if (question.includes(short) && !entities.regions.includes(full)) entities.regions.push(full);
     }
@@ -4540,11 +4540,14 @@ app.post('/api/agent/stream', async (req, res) => {
         const history = getSessionHistory(cleanSessionId);
         // 若用户追问的是历史某条回答，把该 Q+A 追加到 history 末尾作为临时锚点
         // 这样 expandShortFollowup 能正确理解"那上海呢"指的是哪个话题
+        // 追问锚点：直接把原始 Q+A 拼到当前问题前面，确保 LLM 理解指代的是哪条回答
+        // 不作为 assistant 消息注入（会被最近的上下文压权重），而是改写 question 本身
+        let effectiveQuestion = question.trim();
         if (followupContext && typeof followupContext === 'string') {
             const anchor = followupContext.slice(0, 300);
-            history.push({ role: 'assistant', content: `[追问锚点] ${anchor}` });
+            effectiveQuestion = `（以下是用户想追问的原始对话：${anchor}）\n\n基于上述对话，用户的新问题是：${effectiveQuestion}`;
         }
-        const result = await runAgentBatch(question.trim(), history);
+        const result = await runAgentBatch(effectiveQuestion, history);
         clearInterval(statusTimer);
 
         // 流式推送答案文字（4字一批，10ms 间隔 ≈ 400字/秒，视觉流畅）

@@ -700,6 +700,7 @@ function _updateQueueBadge() {
 
 // 处理队列中的追问（用户气泡已显示，直接触发AI回答）
 async function _sendRagQueued(question) {
+    const thisSessionId = currentSessionId; // 锁定 session，防止用户切换后存错
     const input = document.getElementById('rag-input');
     const sendBtn = document.getElementById('rag-send');
     const stopBtn = document.getElementById('rag-stop');
@@ -715,7 +716,7 @@ async function _sendRagQueued(question) {
             </div>
         </div>`;
     isRagStreaming = true;
-    _setSessionLoading(currentSessionId, true);
+    _setSessionLoading(thisSessionId, true);
     const liveSteps = [...assistantBubble.querySelectorAll('.rag-live-steps span')];
     let liveStepIndex = 0;
     const liveProgressTimer = setInterval(() => {
@@ -729,7 +730,7 @@ async function _sendRagQueued(question) {
     if (hint) hint.innerHTML = '<span>正在检索数据...</span>';
 
     try {
-        const sessionId = getCurrentSession()?.id || 'default';
+        const sessionId = thisSessionId || 'default';
         const response = await fetch('/api/agent/stream', {
             signal: ragController.signal,
             method: 'POST',
@@ -783,7 +784,7 @@ async function _sendRagQueued(question) {
         assistantBubble.classList.remove('streaming-cursor');
         _appendRegenerateBtn(assistantBubble, question);
         setTimeout(() => executeAgentUiActions(data, question, assistantBubble), 180);
-        const session = getCurrentSession();
+        const session = sessions.find(s => s.id === thisSessionId);
         if (session) {
             session.messages.push({ role: 'user', content: question });
             session.messages.push({ role: 'assistant', content: finalAnswer2, html });
@@ -802,7 +803,7 @@ async function _sendRagQueued(question) {
     } finally {
         clearInterval(liveProgressTimer);
         isRagStreaming = false;
-        _setSessionLoading(currentSessionId, false);
+        _setSessionLoading(thisSessionId, false);
         ragController = null;
         if (sendBtn) { sendBtn.disabled = false; sendBtn.style.display = 'flex'; }
         if (stopBtn) stopBtn.style.display = 'none';
@@ -816,6 +817,7 @@ async function _sendRagQueued(question) {
 
 function _appendRegenerateBtn(bubble, question) {
     if (!question || !bubble) return;
+    if (bubble.querySelector('.rag-regen-bar')) return; // 防止重复添加
     const bar = document.createElement('div');
     bar.className = 'rag-regen-bar';
     bar.innerHTML = `
@@ -916,7 +918,15 @@ function saveSessions() {
         const keepId = currentSessionId || emptyOnes[0].id;
         sessions = sessions.filter(s => s.messages.length > 0 || s.id === keepId);
     }
-    try { localStorage.setItem('rag_sessions', JSON.stringify(sessions)); } catch(e) {}
+    try { localStorage.setItem('rag_sessions', JSON.stringify(sessions)); } catch(e) {
+        console.warn('Session save failed (storage full?):', e);
+        // 存储满时尝试只保留最近 5 条对话
+        try {
+            const trimmed = sessions.slice(-5);
+            localStorage.setItem('rag_sessions', JSON.stringify(trimmed));
+            sessions = trimmed;
+        } catch(e2) { console.error('Session save failed even after trim:', e2); }
+    }
 }
 
 function clearFollowupContext() {
@@ -1049,13 +1059,6 @@ function renderSessionList() {
 
 // Session event delegation
 document.addEventListener('click', function(e) {
-    const suggestion = e.target.closest('.rag-suggestion');
-    if (suggestion) {
-        const q = suggestion.textContent.trim();
-        if (q) sendRagQuick(q);
-        return;
-    }
-
     const item = e.target.closest('.session-item[data-session-id]');
     const del = e.target.closest('.session-delete[data-delete-id]');
     
@@ -1178,7 +1181,7 @@ async function sendRagMessage() {
             </div>
         </div>`;
     isRagStreaming = true;
-    _setSessionLoading(currentSessionId, true);
+    _setSessionLoading(thisSessionId, true);
     const liveSteps = [...assistantBubble.querySelectorAll('.rag-live-steps span')];
     let liveStepIndex = 0;
     const liveProgressTimer = setInterval(() => {
@@ -1205,7 +1208,7 @@ async function sendRagMessage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 question,
-                sessionId: currentSessionId || 'default',
+                sessionId: thisSessionId || 'default',
                 ...(followupContext ? { followupContext } : {})
             })
         });
@@ -1395,7 +1398,7 @@ async function sendRagMessage() {
     } finally {
         clearInterval(liveProgressTimer);
         isRagStreaming = false;
-        _setSessionLoading(currentSessionId, false);
+        _setSessionLoading(thisSessionId, false);
         ragController = null;
         if (sendBtn) { sendBtn.disabled = false; sendBtn.style.display = 'flex'; }
         if (stopBtn) stopBtn.style.display = 'none';
@@ -3436,23 +3439,24 @@ function initPieChart() {
         };
     }
     
-    document.getElementById("pie-year-prev")?.addEventListener("click", () => {
+    const prevBtn = document.getElementById("pie-year-prev");
+    const nextBtn = document.getElementById("pie-year-next");
+    if (prevBtn) prevBtn.onclick = () => {
         let idx = pieAvailableYears.indexOf(pieCurrentYear);
         if (idx > 0) {
             pieCurrentYear = pieAvailableYears[idx-1];
             if (yearSel) yearSel.value = pieCurrentYear;
             renderPieChart();
         }
-    });
-    
-    document.getElementById("pie-year-next")?.addEventListener("click", () => {
+    };
+    if (nextBtn) nextBtn.onclick = () => {
         let idx = pieAvailableYears.indexOf(pieCurrentYear);
         if (idx < pieAvailableYears.length-1) {
             pieCurrentYear = pieAvailableYears[idx+1];
             if (yearSel) yearSel.value = pieCurrentYear;
             renderPieChart();
         }
-    });
+    };
     
     pieCarouselQueue = [];
     for (let y of pieAvailableYears) {
@@ -3872,7 +3876,10 @@ function renderRankCompareChart(metric, year) {
     
     const container = document.getElementById("advanced-content");
     if (!container) return;
-    
+
+    // 销毁旧的 ECharts 实例，防止内存泄漏
+    if (advancedChart) { advancedChart.dispose(); advancedChart = null; }
+
     container.innerHTML = `<div class="rank-list-container" id="rank-list-panel"></div><div class="rank-chart-container" id="rank-chart-panel"></div>`;
     
     const listPanel = document.getElementById("rank-list-panel");
