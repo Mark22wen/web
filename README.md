@@ -21,7 +21,7 @@
 12. [Agent 决策流程](#12-agent-决策流程)
 13. [前端图表渲染流程](#13-前端图表渲染流程)
 14. [SSE 流式推送流程](#14-sse-流式推送流程)
-15. [提交包与老师本地运行](#15-提交包与老师本地运行)
+15. [提交包与本地运行](#15-提交包与本地运行)
 16. [常见问题](#16-常见问题)
 
 ---
@@ -646,22 +646,22 @@ POST /api/agent/stream
 
 ---
 
-## 15. 提交包与老师本地运行
+## 15. 提交包与本地运行
 
 ### 提交包内容
 
-为方便老师直接本地体验，最终压缩包可包含已经构建好的 ChromaDB 向量库和演示用 `.env`：
+压缩包结构如下（已排除 `node_modules/` 和 `.git/`）：
 
 ```text
-rag-backend-final/
+rag-backend/
 ├── server.js
 ├── package.json
 ├── package-lock.json
 ├── README.md
 ├── data.json
-├── .env
+├── .env                  ← 含 API Key，仅用于验收体验，勿上传公开网盘
 ├── public/
-├── chroma_db/
+├── chroma_db/            ← 已构建的向量库，可直接使用
 ├── ingest.js
 ├── knowledge_ingest.py
 ├── url_ingest.py
@@ -669,50 +669,97 @@ rag-backend-final/
 └── .gitignore
 ```
 
-不建议放入以下内容：
+> ⚠️ `.env` 中含有 `DEEPSEEK_API_KEY`，仅供本地验收体验使用，请勿公开传播。
 
-```text
-node_modules/
-.git/
-server.log
-h.year)
-set
-public/资料/.DS_Store
+---
+
+### 本地运行完整步骤
+
+#### 前提：安装运行环境（首次运行需完成）
+
+**① 安装 Node.js 18+**
+
+前往官网下载 `.msi` 安装包（推荐，不要用 winget，可能 PATH 未自动更新）：
+
+```
+https://nodejs.org/zh-cn/download
 ```
 
-说明：
-- `node_modules/` 不需要提交，老师运行 `npm install` 后会自动生成。
-- `.env` 为本地演示配置文件，若其中包含 `DEEPSEEK_API_KEY`，仅用于课程验收体验，不应上传到公开仓库或公开网盘。
-- `chroma_db/` 为已构建向量库，配合 ChromaDB 服务启动后可直接用于报告/白皮书 RAG 问答。
+安装时保持默认选项，安装完成后重新打开 PowerShell，验证：
 
-### 老师本地运行步骤
-
-**第 1 步：安装 Node.js 依赖**
-
-```bash
-npm install
+```powershell
+node -v   # 应显示 v18.x 或更高
+npm -v
 ```
 
-**第 2 步：启动 ChromaDB 向量库**
+**② 安装 Python 3.10+ 及 ChromaDB（用于知识库语义检索）**
 
-另开一个终端，在项目根目录运行：
+前往官网下载 Python：
 
-```bash
+```
+https://www.python.org/downloads/
+```
+
+> ⚠️ 安装时勾选 **"Add Python to PATH"**，否则后续命令找不到 python/pip。
+
+安装完成后，打开 PowerShell 安装 ChromaDB：
+
+```powershell
+pip install chromadb
+```
+
+如果网络较慢，可加国内镜像：
+
+```powershell
+pip install chromadb -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+---
+
+#### 运行项目（每次启动）
+
+**第 1 步：解压项目，切换到项目目录**
+
+```powershell
+cd D:\Users\lbc\Desktop\666\rag-backend   # 替换为实际解压路径
+```
+
+**第 2 步：安装 Node.js 依赖**
+
+```powershell
+npm install --ignore-scripts
+```
+
+> 加 `--ignore-scripts` 是为了跳过 `sharp` 等需要本地编译工具的包，避免报错。
+
+如果遇到 "无法加载文件，因为在此系统上禁止运行脚本" 的错误，先执行：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+然后重新运行 `npm install --ignore-scripts`。
+
+**第 3 步：启动 ChromaDB 向量库**（另开一个 PowerShell 窗口）
+
+```powershell
+cd D:\Users\lbc\Desktop\666\rag-backend
 chroma run --path ./chroma_db
 ```
 
-如果只体验数据看板和普通 AI 数据分析，不使用报告/白皮书语义检索，也可以在 `.env` 中设置：
+看到 `Running on http://localhost:8000` 即表示启动成功，**不要关闭此窗口**。
+
+如果不需要报告/白皮书语义检索功能，也可以跳过此步，在项目的 `.env` 文件中添加一行：
 
 ```env
 DISABLE_CHROMA=true
 ```
 
-**第 3 步：启动网站后端**
+**第 4 步：启动网站后端**（再开一个 PowerShell 窗口）
 
-再开一个终端，在项目根目录运行：
-
-```bash
-npm start
+```powershell
+cd D:\Users\lbc\Desktop\666\rag-backend
+node server.js
 ```
 
 看到控制台输出：
@@ -721,19 +768,51 @@ npm start
 ✅ 就绪，等待提问...
 ```
 
-即可在浏览器访问：
+即表示启动成功，**不要关闭此窗口**。
 
-```text
+**第 5 步：浏览器访问**
+
+打开浏览器，输入：
+
+```
 http://localhost:3001
 ```
 
-**第 4 步：可选检查**
+即可进入系统主界面。
 
-```bash
-npm test
+---
+
+#### 可选：本地 Ollama 部署（无需 DeepSeek API Key 的离线模式）
+
+如果运行环境没有网络或 API Key 不可用，可以安装 Ollama 使用本地大模型：
+
+```
+https://ollama.com/download
 ```
 
-该命令会检查 `server.js` 和 `public/script.js` 的 JavaScript 语法是否正常。
+安装后拉取所需模型（约 5~8 GB，需要时间）：
+
+```powershell
+ollama pull deepseek-r1:7b
+ollama pull bge-m3
+```
+
+然后将 `.env` 中的 `DEEPSEEK_API_KEY` 设为空，系统会自动切换到本地 Ollama。
+
+---
+
+#### 常用检查命令
+
+```powershell
+# 验证 Node.js 版本
+node -v
+
+# 验证依赖已安装
+npm list --depth=0
+
+# 检查语法是否正常（可选）
+npm test
+```
 
 ---
 
@@ -757,6 +836,16 @@ ChromaDB 需要单独启动。如果不需要知识库语义检索，在 `.env` 
 2. 将 `年份` 和 `地区` 列名统一（地级市如使用`时间`会自动转换）
 3. 替换 `data.json` 重启服务
 4. 如有新指标，更新 `server.js` 顶部的 `METRIC_SYNONYMS` 词表以便语义识别
+
+### Q: `npm install` 报 `sharp` 编译超时或失败
+
+部分机器没有安装 Visual Studio C++ 构建工具，`sharp` 包会编译失败。改用：
+
+```powershell
+npm install --ignore-scripts
+```
+
+`sharp` 仅用于图片处理（PNG 导出优化），跳过编译不影响核心功能。
 
 ### Q: 如何修改端口
 
