@@ -12,7 +12,7 @@ window.fetch = (url, opts = {}) => {
 };
 // ======================= 工具函数 =======================
 function log(...args) {
-    console.log("[Platform]", ...args);
+    // 生产环境静默，避免在控制台暴露内部状态
 }
 
 function findColumn(row, possibleNames) {
@@ -1099,7 +1099,7 @@ function switchSession(id) {
     if (!session.messages.length && !isThisSessionLoading) {
         container.innerHTML = `<div class="rag-welcome">
             <div class="rag-welcome-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="32" height="32"><use href="#ico-brain"/></svg></div>
-            <h2>教育科技人才一体化平台智能助手</h2>
+            <h2>教育科技人才一体发展智能体平台智能助手</h2>
             <p>查询数据 · 分析趋势 · 了解人才体系 · 查阅报告内容</p>
         </div>`;
     } else {
@@ -2218,7 +2218,6 @@ function _doRenderInlineChart(chartId, config, isModal) {
     // Cleanup on dispose
     chart._resizeFn = resizeFn;
     
-    console.log('✅ 内联图表渲染完成:', chartId);
 }
 
 
@@ -2462,7 +2461,7 @@ let originalRows = [], headers = [];
 let tableSheet = "全国";
 let advSheet = "省份";
 let advRows = [];
-let analysisSheet = "省份";
+let analysisSheet = "全国";
 let tableRows = [], tableHeaders = [];
 let dimType = "nation";
 let valueFields = [];
@@ -3042,7 +3041,7 @@ function switchSheet(sheetName) {
     mainCarouselManualPaused = false;
     isCarouselPaused = false;
     const pauseBtn = document.getElementById("main-pause-carousel");
-    if (pauseBtn) pauseBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播';
+    if (pauseBtn) pauseBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg><span class="pause-label">暂停轮播</span>';
     stopCarousel();
     startCarousel();
     renderMainChart();
@@ -3105,9 +3104,11 @@ function updateNationHighlight() {
 function buildGroupPanel(groups, type) {
     allRegionList = groups;
     const titleMap = { "省份": "省份", "地级市": "地区" };
+    // 主图表地区上限：省份最多8个，地级市最多10个（线图/柱图超过后难以辨识）
+    const MAX_MAIN = type === "省份" ? 8 : 10;
     const panelTitle = document.getElementById("panel-title");
     if (panelTitle) panelTitle.innerHTML = `${titleMap[type]}`;
-    
+
     const container = document.getElementById("indicator-list");
     if (!container) return;
 
@@ -3117,7 +3118,7 @@ function buildGroupPanel(groups, type) {
         if (keyword !== "") {
             filteredGroups = allRegionList.filter(g => g.toLowerCase().includes(keyword));
         }
-        if (panelTitle) panelTitle.innerHTML = `${titleMap[type]}（${filteredGroups.length} / ${allRegionList.length}）`;
+        if (panelTitle) panelTitle.innerHTML = `${titleMap[type]}（已选 ${selectedGroups.length}/${MAX_MAIN}，共 ${allRegionList.length}）`;
 
         container.innerHTML = "";
         if (filteredGroups.length === 0) {
@@ -3135,44 +3136,38 @@ function buildGroupPanel(groups, type) {
             labelSpan.innerText = g;
             div.appendChild(cb);
             div.appendChild(labelSpan);
-            
+
             cb.onchange = (e) => {
                 if (e.target.checked) {
+                    if (selectedGroups.length >= MAX_MAIN) {
+                        e.target.checked = false;
+                        showToast(`主图表最多同时展示 ${MAX_MAIN} 个${titleMap[type]}，请先取消勾选其他地区`, 'warn');
+                        return;
+                    }
                     if (!selectedGroups.includes(g)) selectedGroups.push(g);
                 } else {
                     selectedGroups = selectedGroups.filter(s => s !== g);
                 }
                 // 始终按 allRegionList 原始顺序排列，保证颜色与列表位置一致
                 selectedGroups = allRegionList.filter(r => selectedGroups.includes(r));
+                renderRegionList();
                 renderMainChart();
             };
-            
+
             div.onclick = (e) => {
                 if (e.target !== cb) {
                     cb.checked = !cb.checked;
                     cb.dispatchEvent(new Event('change', { bubbles: true }));
                 }
             };
-            
+
             container.appendChild(div);
         });
     }
 
-    const selectAllBtn = document.getElementById("select-all");
-    const invertBtn = document.getElementById("invert-select");
     const resetBtn = document.getElementById("reset-select");
     const clearBtn = document.getElementById("clear-select");
-    
-    if (selectAllBtn) selectAllBtn.onclick = () => {
-        selectedGroups = [...allRegionList];
-        renderRegionList();
-        renderMainChart();
-    };
-    if (invertBtn) invertBtn.onclick = () => {
-        selectedGroups = allRegionList.filter(g => !selectedGroups.includes(g));
-        renderRegionList();
-        renderMainChart();
-    };
+
     if (resetBtn) resetBtn.onclick = () => {
         selectedGroups = allRegionList.slice(0, 3);
         renderRegionList();
@@ -3440,7 +3435,7 @@ function toggleMainCarousel() {
         // 手动恢复：若鼠标仍在卡片上，保持 hover-pause；否则立即恢复
         isCarouselPaused = isMouseOverMainChart;
         if (!isMouseOverMainChart) startCarousel();
-        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播';
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg><span class="pause-label">暂停轮播</span>';
     }
 }
 
@@ -3451,12 +3446,12 @@ function togglePieCarousel() {
     if (pieManualPaused) {
         piePaused = true;
         stopPieCarousel();
-        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px"><polygon points="6 4 20 12 6 20 6 4"/></svg>开始轮播';
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px"><polygon points="6 4 20 12 6 20 6 4"/></svg><span class="pause-label">开始轮播</span>';
     } else {
         // 手动恢复：若鼠标仍在卡片上，保持 hover-pause；否则立即恢复
         piePaused = isMouseOverAnalysis;
         if (!isMouseOverAnalysis) startPieCarousel();
-        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播';
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg><span class="pause-label">暂停轮播</span>';
     }
 }
 
@@ -3909,7 +3904,7 @@ function renderRankUI() {
         <div class="tool-pill"><label>年份</label><select id="adv-year-select"></select></div>
         <button id="adv-pause-carousel" class="action-btn ghost" type="button">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-            暂停轮播
+            <span class="pause-label">暂停轮播</span>
         </button>
     `;
     
@@ -3974,12 +3969,12 @@ function toggleAdvCarousel() {
     if (advManualPaused) {
         advPaused = true;
         stopAdvCarousel();
-        if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px"><polygon points="6 4 20 12 6 20 6 4"/></svg>开始轮播';
+        if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px"><polygon points="6 4 20 12 6 20 6 4"/></svg><span class="pause-label">开始轮播</span>';
     } else {
         // 手动恢复：若鼠标仍在卡片上，保持 hover-pause；否则立即恢复
         advPaused = isMouseOverAnalysis;
         if (!isMouseOverAnalysis) startAdvCarousel();
-        if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播';
+        if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg><span class="pause-label">暂停轮播</span>';
     }
 }
 
@@ -4036,6 +4031,9 @@ function renderRankCompareChart(metric, year, fromCarousel = false) {
         }
     }
     
+    // 守卫：饼图视图下不切换面板（防止轮播定时器在 mouseleave 后重启并覆盖饼图）
+    if (analysisSheet === "全国") return;
+
     // Show adv panels, hide pie panels
     const avPieLeft  = document.getElementById("av-pie-left");
     const avAdvLeft  = document.getElementById("av-adv-left");
@@ -4057,9 +4055,10 @@ function renderRankCompareChart(metric, year, fromCarousel = false) {
         const filtered = keyword
             ? indexed.filter(({ item }) => String(item.name || '').toLowerCase().includes(keyword))
             : indexed;
+        const MAX_RANK = analysisSheet === "省份" ? 15 : 20;
         if (meta) meta.textContent = keyword
-            ? `显示 ${filtered.length} / ${data.length} 个地区`
-            : `共 ${data.length} 个地区`;
+            ? `已选 ${rankSelectedNames.size}/${MAX_RANK}，显示 ${filtered.length} / ${data.length}`
+            : `已选 ${rankSelectedNames.size}/${MAX_RANK}，共 ${data.length}`;
         listBody.innerHTML = "";
         if (!filtered.length) {
             listBody.innerHTML = '<div class="rank-empty">未找到匹配地区</div>';
@@ -4073,8 +4072,19 @@ function renderRankCompareChart(metric, year, fromCarousel = false) {
             cb.type = "checkbox";
             cb.checked = isChecked;
             cb.onchange = (e) => {
-                if (e.target.checked) { rankSelectedNames.add(item.name); div.classList.add("active"); }
-                else { rankSelectedNames.delete(item.name); div.classList.remove("active"); }
+                if (e.target.checked) {
+                    if (rankSelectedNames.size >= MAX_RANK) {
+                        e.target.checked = false;
+                        showToast(`排名图最多同时展示 ${MAX_RANK} 个地区，请先取消勾选其他地区`, 'warn');
+                        return;
+                    }
+                    rankSelectedNames.add(item.name);
+                    div.classList.add("active");
+                } else {
+                    rankSelectedNames.delete(item.name);
+                    div.classList.remove("active");
+                }
+                buildRankList(rankFullData);
                 updateRankChart();
             };
             const rankSpan  = document.createElement("span");
@@ -4891,16 +4901,31 @@ function hasPotentialMissingValueProcessingFromText(text) {
 }
 
 // ── 查看大图辅助 ──────────────────────────────────────
-function _addViewFullBtn(chartDom, onClick) {
-    const old = chartDom.querySelector('.view-full-btn');
-    if (old) old.remove();
+// align: 'right'（默认，绝对定位在图内右下角）
+//        'below-right'（挂到图表外部下方，右对齐，避免遮挡图内右侧标签）
+function _addViewFullBtn(chartDom, onClick, align = 'right') {
+    // 清理旧按钮：图内的 button 和图外的 wrap 都要删，与当前 align 无关
+    chartDom.querySelector('.view-full-btn')?.remove();
+    chartDom.parentElement?.querySelectorAll('.view-full-btn-wrap').forEach(el => el.remove());
+
     const btn = document.createElement('button');
     btn.className = 'view-full-btn';
     btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg> 查看大图`;
-    btn.style.cssText = 'position:absolute;bottom:10px;right:10px;z-index:10;display:flex;align-items:center;gap:4px;font-size:.78rem;color:var(--c-muted);background:rgba(255,255,255,.88);backdrop-filter:blur(4px);border:1px solid var(--c-border);border-radius:6px;padding:4px 10px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.08);';
     btn.onclick = onClick;
-    if (getComputedStyle(chartDom).position === 'static') chartDom.style.position = 'relative';
-    chartDom.appendChild(btn);
+
+    if (align === 'below-right') {
+        // 挂到图表外部下方，右对齐，完全不遮挡图内内容
+        const wrap = document.createElement('div');
+        wrap.className = 'view-full-btn-wrap';
+        wrap.style.cssText = 'display:flex;justify-content:flex-end;padding:4px 2px 0;';
+        btn.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:.78rem;color:var(--c-muted);background:rgba(255,255,255,.88);backdrop-filter:blur(4px);border:1px solid var(--c-border);border-radius:6px;padding:4px 10px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.08);';
+        wrap.appendChild(btn);
+        chartDom.insertAdjacentElement('afterend', wrap);
+    } else {
+        btn.style.cssText = 'position:absolute;bottom:10px;right:10px;z-index:10;display:flex;align-items:center;gap:4px;font-size:.78rem;color:var(--c-muted);background:rgba(255,255,255,.88);backdrop-filter:blur(4px);border:1px solid var(--c-border);border-radius:6px;padding:4px 10px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.08);';
+        if (getComputedStyle(chartDom).position === 'static') chartDom.style.position = 'relative';
+        chartDom.appendChild(btn);
+    }
 }
 
 function _openRawEchartsModal(option, title, height = 520) {
@@ -5191,7 +5216,8 @@ async function loadChart(type) {
         };
         currentChartInstance.setOption(bfOption, true);
         ensureScatterInteractionHint('butterfly');
-        _addViewFullBtn(chartDom, () => _openRawEchartsModal(bfOption, `${year}年 ${regA} vs ${regB}`, Math.max(600, chartH)));
+        // 蝴蝶图右侧有数值标签，按钮挂到图表外部下方右对齐，避免遮挡图内标签
+        _addViewFullBtn(chartDom, () => _openRawEchartsModal(bfOption, `${year}年 ${regA} vs ${regB}`, Math.max(600, chartH)), 'below-right');
         setTimeout(() => currentChartInstance.resize({ height: chartH }), 100);
         return;
     }
@@ -5690,12 +5716,13 @@ function bindEvents() {
             isMouseOverAnalysis = false;
             if (!pieManualPaused) {
                 piePaused = false;
-                // timer 可能在 hover 期间被 stop，mouseleave 时补重启
-                if (!pieCarouselTimer) startPieCarousel();
+                // 只在饼图视图下补启饼图轮播，避免在排名视图下误启
+                if (!pieCarouselTimer && analysisSheet === "全国") startPieCarousel();
             }
             if (!advManualPaused) {
                 advPaused = false;
-                if (!advCarouselTimer) startAdvCarousel();
+                // 只在排名图视图下补启排名轮播，饼图视图下不启动，避免覆盖饼图面板
+                if (!advCarouselTimer && analysisSheet !== "全国") startAdvCarousel();
             }
         };
         avCard.addEventListener("mouseenter", pauseAnalysisCarousel);
@@ -5703,6 +5730,16 @@ function bindEvents() {
         avCard.addEventListener("touchstart", pauseAnalysisCarousel, { passive: true });
         avCard.addEventListener("touchend", () => setTimeout(resumeAnalysisCarousel, 1200), { passive: true });
     }
+
+    // 修复：<select> 未展开时捕获 wheel 事件导致页面无法滚动
+    // 将 wheel 事件转发给页面滚动，同时保留已展开（focused）select 的原生滚动行为
+    document.addEventListener('wheel', (e) => {
+        const el = e.target;
+        if (el && el.tagName === 'SELECT' && el !== document.activeElement) {
+            e.preventDefault();
+            window.scrollBy({ top: e.deltaY, left: e.deltaX });
+        }
+    }, { passive: false });
 
     // 暂停按钮事件绑定
     document.getElementById("main-pause-carousel")?.addEventListener("click", toggleMainCarousel);
@@ -6113,7 +6150,7 @@ function agentBuildDocx(data, question) {
     const trace = (data.toolTrace || []).map(t => `${t.normalizedTool || t.tool || 'tool'}: ${JSON.stringify(t.params || {})}`);
     const sections = [
         agentDocxParagraph(title, 'Title'),
-        agentDocxParagraph(`生成时间：${now}　来源：山东财经大学教育科技人才一体化平台`),
+        agentDocxParagraph(`生成时间：${now}　来源：山东财经大学教育科技人才一体发展智能体平台`),
         agentDocxParagraph('分析结论', 'Heading1'),
         agentDocxParagraph(agentPlainText(data.answer || '（无内容）')),
         citations.length ? agentDocxParagraph('数据来源', 'Heading1') + citations.map(x => agentDocxParagraph(`· ${x}`)).join('') : ''
