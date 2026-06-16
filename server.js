@@ -34,6 +34,10 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || process.env.MODEL_NAME || 'deep
 const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'bge-m3';
 const OLLAMA_TIMEOUT_MS = parseInt(process.env.OLLAMA_TIMEOUT_MS || '120000', 10);
 const OLLAMA_FAST_MODEL = process.env.OLLAMA_FAST_MODEL || 'deepseek-r1:7b';
+// 硅基流动 embedding API（替代 Ollama embedding，无需本地显存）
+const SILICONFLOW_API_KEY = process.env.SILICONFLOW_API_KEY || '';
+const SILICONFLOW_EMBED_MODEL = process.env.SILICONFLOW_EMBED_MODEL || 'BAAI/bge-m3';
+const USE_SILICONFLOW_EMBED = !!SILICONFLOW_API_KEY;
 
 // DeepSeek API 配置（优先使用，没有 Key 时自动降级到本地 Ollama）
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
@@ -56,6 +60,7 @@ app.use(cors({
         if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
         if (/\.ngrok-free\.dev$/.test(origin)) return callback(null, true);
         if (/\.ngrok\.io$/.test(origin)) return callback(null, true);
+        if (/^https?:\/\/sdufe-ssm\.cn$/.test(origin)) return callback(null, true);
         if (allowedOrigins.includes(origin)) return callback(null, true);
         return callback(new Error('CORS origin denied'));
     }
@@ -235,27 +240,10 @@ function normalizeToolName(tool) {
     const map = {
         query_trend: 'trend_analysis',
         compare_regions: 'compare',
-        predict_future: 'forecast',
         rank_provinces: 'get_ranking',
         query_point: 'point_query'
     };
     return map[tool] || tool;
-}
-
-function getForecastInterval(history, forecastValue, targetYear = null) {
-    if (!history || history.length < 3 || typeof forecastValue !== 'number') return null;
-    const diffs = [];
-    for (let i = 1; i < history.length; i++) diffs.push(history[i].value - history[i - 1].value);
-    const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
-    const variance = diffs.reduce((s, d) => s + Math.pow(d - mean, 2), 0) / Math.max(1, diffs.length - 1);
-    const latestYear = history[history.length - 1]?.year || 0;
-    const step = Math.max(1, Math.abs((targetYear || latestYear + 1) - latestYear));
-    const band = Math.max(Math.sqrt(variance) * 1.64 * Math.sqrt(step), Math.abs(forecastValue) * 0.03 * Math.sqrt(step));
-    return {
-        lower: Number((forecastValue - band).toFixed(4)),
-        upper: Number((forecastValue + band).toFixed(4)),
-        confidenceLabel: history.length < 5 ? '偏低' : step >= 4 ? '偏低' : step >= 2 ? '中等' : '较高'
-    };
 }
 
 // 安全解析 LLM 返回的 JSON，多层容错
@@ -290,7 +278,7 @@ async function condenseQuestion(question, history) {
     const isObviouslyStandalone =
         question.length > 25 ||                                   // 够长，信息完整
         /^\d{4}年/.test(question) ||                              // 以年份开头
-        /^(请|帮|告诉我|分析|比较|预测|列出)/.test(question) ||  // 明确指令性开头
+        /^(请|帮|告诉我|分析|比较|列出)/.test(question) ||  // 明确指令性开头
         !/[一-龥]/.test(question);                        // 纯英文/数字
     if (isObviouslyStandalone) return question;
 
@@ -432,14 +420,31 @@ async function getEmbedding(text) {
         embeddingCache.set(prompt, cached);
         return cached;
     }
-    const response = await axios.post(`${OLLAMA_URL}/api/embeddings`, {
-        model: OLLAMA_EMBED_MODEL,
-        prompt
-    }, { timeout: OLLAMA_TIMEOUT_MS });
-    if (!Array.isArray(response.data?.embedding)) {
-        throw new Error('Ollama embedding 返回为空');
+    let embedding;
+    if (USE_SILICONFLOW_EMBED) {
+        // 硅基流动 embedding API（与 OpenAI 兼容）
+        const sfRes = await axios.post('https://api.siliconflow.cn/v1/embeddings', {
+            model: SILICONFLOW_EMBED_MODEL,
+            input: prompt,
+            encoding_format: 'float'
+        }, {
+            headers: { Authorization: `Bearer ${SILICONFLOW_API_KEY}`, 'Content-Type': 'application/json' },
+            timeout: 15000
+        });
+        if (!Array.isArray(sfRes.data?.data?.[0]?.embedding)) {
+            throw new Error('硅基流动 embedding 返回为空');
+        }
+        embedding = sfRes.data.data[0].embedding;
+    } else {
+        const response = await axios.post(`${OLLAMA_URL}/api/embeddings`, {
+            model: OLLAMA_EMBED_MODEL,
+            prompt
+        }, { timeout: OLLAMA_TIMEOUT_MS });
+        if (!Array.isArray(response.data?.embedding)) {
+            throw new Error('Ollama embedding 返回为空');
+        }
+        embedding = response.data.embedding;
     }
-    const embedding = response.data.embedding;
     if (embeddingCache.size >= EMBEDDING_CACHE_MAX) {
         embeddingCache.delete(embeddingCache.keys().next().value);
     }
@@ -750,7 +755,7 @@ function answerAllMetricDetails(question, entities = null) {
             citations: [`[来源: ${isNational ? '全国表' : '省份表'}/${region}/${year}]`],
             reasoning: ['意图: 地区年度全指标明细查询', '未命中对应地区/年份行'],
             confidence: 0.75,
-            suggestions: [`${region}近10年科学支出水平趋势`, `${year}年各省科学支出水平排名`, `预测2026年${region}科学支出水平`],
+            suggestions: [`${region}近10年科学支出水平趋势`, `${year}年各省科学支出水平排名`, `江苏和浙江科学支出水平对比`],
             methodSummary: {
                 type: 'all_metric_detail',
                 title: '年度全指标明细查询',
@@ -813,7 +818,7 @@ function answerAllMetricDetails(question, entities = null) {
     }
     const tableLines = details.map((item, index) => `| ${index + 1} | ${item.metric} | ${formatValue(Number(item.value))} |`).join('\n');
     const answer = wantsAll
-        ? `找到了。**${year}年${region}** 共有 **${details.length} 项可用指标**：\n\n| 序号 | 指标 | 数值 |\n|---:|---|---:|\n${tableLines}\n\n这些数值来自${isNational ? '全国表' : '省份表'}原始数据行，适合继续做趋势、排名、预测或地区对比。`
+        ? `找到了。**${year}年${region}** 共有 **${details.length} 项可用指标**：\n\n| 序号 | 指标 | 数值 |\n|---:|---|---:|\n${tableLines}\n\n这些数值来自${isNational ? '全国表' : '省份表'}原始数据行，适合继续做趋势、排名或地区对比。`
         : `找到了。**${year}年${region}** 你指定的 **${details.length} 项指标** 如下：\n\n| 序号 | 指标 | 数值 |\n|---:|---|---:|\n${tableLines}\n\n这些数值来自${isNational ? '全国表' : '省份表'}原始数据行。`;
 
     return {
@@ -825,7 +830,6 @@ function answerAllMetricDetails(question, entities = null) {
         suggestions: [
             `${region}科学支出水平近10年趋势`,
             `${year}年各省科学支出水平排名`,
-            `预测2026年${region}科学支出水平`,
             `江苏和浙江科学支出水平对比`
         ],
         methodSummary: {
@@ -868,8 +872,8 @@ function buildHybridKnowledgeIndex() {
                 text,
                 table: source.table,
                 region,
-                year,
-                row
+                year
+                // 不存 row，避免与 rawDataCache 双份存储；需要时用 lookupRowForDoc 反查
             });
         }
     }
@@ -881,6 +885,13 @@ function buildHybridKnowledgeIndex() {
     });
     hybridDocuments.forEach(doc => hybridIndex.add(doc.id, doc.text));
     console.log(`✅ 本地混合知识索引构建完成 (${hybridDocuments.length}条)`);
+}
+
+// hybridDocuments 里不再存 row，需要时按 table/region/year 反查（O(n) 但只在 top-5 结果上调用）
+function lookupRowForDoc(doc) {
+    const tableMap = { '全国': rawDataCache.national, '省份': rawDataCache.province, '地级市': rawDataCache.city };
+    const rows = tableMap[doc.table] || [];
+    return rows.find(r => (r['地区'] || '全国') === doc.region && r['年份'] === doc.year) || {};
 }
 
 // ========== 字段匹配（精确优先） ==========
@@ -958,159 +969,6 @@ function getHistoricalData(metric, region, yearsBack = 10) {
     ).sort((a, b) => a['年份'] - b['年份']);
     const result = rows.map(r => ({ year: r['年份'], value: r[realKey] }));
     return yearsBack && result.length > yearsBack ? result.slice(-yearsBack) : result;
-}
-
-function holtLinearForecast(data, targetYear, alpha = 0.5, beta = 0.5) {
-    if (!data || data.length < 2) return null;
-    let level = data[0].value, trend = data[1].value - data[0].value;
-    for (let i = 1; i < data.length; i++) {
-        const prev = level;
-        level = alpha * data[i].value + (1 - alpha) * (level + trend);
-        trend = beta * (level - prev) + (1 - beta) * trend;
-    }
-    const steps = targetYear - data[data.length - 1].year;
-    return steps <= 0 ? data[data.length - 1].value : level + steps * trend;
-}
-
-function linearRegressionForecast(data, targetYear) {
-    if (!data || data.length < 2) return null;
-    const xs = data.map(d => d.year);
-    const ys = data.map(d => d.value);
-    const xMean = xs.reduce((a, b) => a + b, 0) / xs.length;
-    const yMean = ys.reduce((a, b) => a + b, 0) / ys.length;
-    const denom = xs.reduce((s, x) => s + Math.pow(x - xMean, 2), 0);
-    if (!denom) return ys[ys.length - 1];
-    const slope = xs.reduce((s, x, i) => s + (x - xMean) * (ys[i] - yMean), 0) / denom;
-    const intercept = yMean - slope * xMean;
-    return intercept + slope * targetYear;
-}
-
-function driftForecast(data, targetYear) {
-    if (!data || data.length < 2) return null;
-    const first = data[0], last = data[data.length - 1];
-    const span = Math.max(1, last.year - first.year);
-    const drift = (last.value - first.value) / span;
-    return last.value + drift * (targetYear - last.year);
-}
-
-function movingAverageForecast(data, targetYear) {
-    if (!data || data.length < 2) return null;
-    const windowSize = Math.min(4, data.length);
-    const recent = data.slice(-windowSize);
-    const avg = recent.reduce((s, d) => s + d.value, 0) / recent.length;
-    const recentTrend = recent.length >= 2
-        ? (recent[recent.length - 1].value - recent[0].value) / Math.max(1, recent[recent.length - 1].year - recent[0].year)
-        : 0;
-    return avg + recentTrend * Math.max(0, targetYear - data[data.length - 1].year);
-}
-
-function scoreForecastMethod(data, methodFn) {
-    if (!data || data.length < 5) return { rmse: Infinity, mape: Infinity };
-    const holdout = Math.min(3, Math.floor(data.length / 3));
-    const errors = [];
-    const pctErrors = [];
-    for (let i = data.length - holdout; i < data.length; i++) {
-        const train = data.slice(0, i);
-        const pred = methodFn(train, data[i].year);
-        if (typeof pred !== 'number' || Number.isNaN(pred)) continue;
-        const err = pred - data[i].value;
-        errors.push(err * err);
-        if (Math.abs(data[i].value) > 1e-9) pctErrors.push(Math.abs(err / data[i].value));
-    }
-    if (!errors.length) return { rmse: Infinity, mape: Infinity };
-    return {
-        rmse: Math.sqrt(errors.reduce((a, b) => a + b, 0) / errors.length),
-        mape: pctErrors.length ? pctErrors.reduce((a, b) => a + b, 0) / pctErrors.length : null
-    };
-}
-
-function getMetricForecastProfile(metric = '') {
-    const name = String(metric);
-    if (/(高校数量|图书馆个数|专利|人数|人员|藏书)/.test(name)) {
-        return '计数型指标，预测值已做非负约束，优先比较近期误差，避免给出不合理的负数。';
-    }
-    if (/(比|率|水平|普及度|强度|密度|年限|结构)/.test(name)) {
-        return '比例/强度型指标，优先选择回测误差较低且不过度放大短期波动的方法。';
-    }
-    return '连续型年度指标，综合长期趋势、近期变化和回测误差选择预测方法。';
-}
-
-function chooseForecastModel(data, targetYear, metric = '') {
-    if (!data || data.length < 2) {
-        return { value: null, method: 'insufficient', methodLabel: '数据不足', methodReason: '至少需要2个年份的数据才能进行外推。', backtest: null };
-    }
-    const allNonNegative = data.every(d => d.value >= 0);
-    const profile = getMetricForecastProfile(metric);
-    const candidates = [
-        { method: 'linear_regression', methodLabel: '线性回归趋势预测', fn: linearRegressionForecast, methodReason: '适合长期趋势较稳定、指标随年份呈近似线性变化的数据。' },
-        { method: 'holt_linear', methodLabel: 'Holt线性指数平滑', fn: holtLinearForecast, methodReason: '适合存在趋势但短期波动也需要被平滑处理的年度时间序列。' },
-        { method: 'drift', methodLabel: '平均漂移外推', fn: driftForecast, methodReason: '适合样本较少或趋势变化不宜过度拟合的数据。' },
-        { method: 'moving_average_trend', methodLabel: '近年移动均值趋势外推', fn: movingAverageForecast, methodReason: '适合近期走势比早期数据更有参考价值的指标。' }
-    ];
-    const scored = candidates.map(c => {
-        const rawValue = c.fn(data, targetYear);
-        const value = allNonNegative && typeof rawValue === 'number' ? Math.max(0, rawValue) : rawValue;
-        const backtest = scoreForecastMethod(data, c.fn);
-        return { ...c, value, backtest };
-    }).filter(c => typeof c.value === 'number' && !Number.isNaN(c.value));
-
-    scored.sort((a, b) => {
-        const ar = Number.isFinite(a.backtest.rmse) ? a.backtest.rmse : Number.MAX_SAFE_INTEGER;
-        const br = Number.isFinite(b.backtest.rmse) ? b.backtest.rmse : Number.MAX_SAFE_INTEGER;
-        return ar - br;
-    });
-
-    const best = scored[0] || { value: null, method: 'insufficient', methodLabel: '数据不足', methodReason: '所有预测方法均返回无效值', backtest: null };
-    return {
-        value: best.value,
-        method: best.method,
-        methodLabel: best.methodLabel,
-        methodReason: `${best.methodReason}${profile}`,
-        backtest: best.backtest && Number.isFinite(best.backtest.rmse)
-            ? {
-                rmse: Number(best.backtest.rmse.toFixed(4)),
-                mape: best.backtest.mape == null ? null : Number((best.backtest.mape * 100).toFixed(2))
-            }
-            : null
-    };
-}
-
-function buildForecastPath(data, targetYear, forecastModel, metric = '') {
-    if (!data?.length || !forecastModel || !forecastModel.method) return [];
-    const latestYear = data[data.length - 1].year;
-    if (!targetYear || targetYear <= latestYear) return [];
-    const methodFns = {
-        linear_regression: linearRegressionForecast,
-        holt_linear: holtLinearForecast,
-        drift: driftForecast,
-        moving_average_trend: movingAverageForecast
-    };
-    const fn = methodFns[forecastModel.method] || movingAverageForecast;
-    const allNonNegative = data.every(d => d.value >= 0);
-    const path = [];
-    for (let year = latestYear + 1; year <= targetYear; year++) {
-        let value = fn(data, year);
-        if (typeof value !== 'number' || Number.isNaN(value)) continue;
-        if (allNonNegative) value = Math.max(0, value);
-        path.push({ year, value: Number(value.toFixed(4)), estimated: true });
-    }
-    return path;
-}
-
-function buildForecastMeta(history, targetYear, forecastModel, metric = '') {
-    const latestYear = history?.[history.length - 1]?.year || null;
-    const step = latestYear ? Math.max(0, targetYear - latestYear) : 0;
-    const path = buildForecastPath(history, targetYear, forecastModel, metric);
-    return {
-        latestActualYear: latestYear,
-        forecastStep: step,
-        forecastType: step <= 1 ? '单步预测' : '多步预测',
-        usesActualIntermediateData: false,
-        path,
-        caution: step <= 1
-            ? '目标年份紧邻最新真实年份，属于单步外推。'
-            : `当前数据最新到${latestYear}年，${targetYear}年是向后${step}步外推；中间年份为模型路径估计，不是真实观测值。`
-    };
 }
 
 // ========== 实体提取 ==========
@@ -1194,7 +1052,7 @@ ${historyHint || '无'}
   "regions": ["地区名（省份全称或全国，如有）"],
   "metrics": ["最匹配的指标名（从可用指标里选，最多2个）"],
   "years": [年份数字数组，如有],
-  "intent_hint": "trend|forecast|ranking|compare|point|chat 之一"
+  "intent_hint": "trend|ranking|compare|point|chat 之一"
 }`;
 
     try {
@@ -1675,7 +1533,7 @@ async function retrieveChromaEvidence(question, entities = {}, limit = 8, hydeTe
 
         return items;
     } catch (err) {
-        console.warn(`Chroma 向量检索失败，已回退本地检索: ${err.message}`);
+        console.warn(`Chroma 向量检索失败，已回退本地检索: ${err.message}`, err);
         return [];
     }
 }
@@ -1687,7 +1545,7 @@ async function retrieveChromaEvidence(question, entities = {}, limit = 8, hydeTe
 function extractKeywordsForChroma(question) {
     const stopwords = new Set(['的', '了', '吗', '呢', '啊', '是', '有', '在', '和', '与', '或', '对', '把', '被', '让', '使',
         '这', '那', '什么', '怎么', '为什么', '如何', '哪些', '多少', '几个', '一个', '请问', '告诉', '介绍', '分析',
-        '情况', '表现', '特点', '问题', '方面', '目前', '现在', '近年', '最近', '未来', '发展', '变化', '趋势']);
+        '情况', '表现', '特点', '问题', '方面', '目前', '现在', '近年', '最近', '发展', '变化', '趋势']);
     // 提取2字以上、不在停用词表里的词组
     const tokens = question.match(/[一-龥a-zA-Z]{2,}/g) || [];
     return [...new Set(tokens.filter(t => !stopwords.has(t) && t.length >= 2))];
@@ -1700,7 +1558,7 @@ function buildEvidenceFallbackAnswer(question, evidence, entities = {}) {
         return '我没有在当前数据集中检索到足够相关的证据。你可以补充地区、年份或指标，我会重新检索。';
     }
     const lines = evidence.slice(0, 5).map((doc, i) =>
-        `${i + 1}. ${doc.table}/${doc.region}/${doc.year}：${buildRelevantMetricSnapshot(doc.row, question, entities, 6)}`
+        `${i + 1}. ${doc.table}/${doc.region}/${doc.year}：${buildRelevantMetricSnapshot(lookupRowForDoc(doc), question, entities, 6)}`
     );
     return `**基于本地数据的检索摘要**\n\n${lines.join('\n')}\n\n**说明：**当前回答使用本地混合检索和重排序生成。若本地 DeepSeek 未响应，我会先给出证据摘要，避免编造结论。`;
 }
@@ -1932,7 +1790,7 @@ async function retrieveCorrectiveEvidence(question, entities = {}) {
         Promise.resolve(retrieveHybridEvidence(question, entities, 8)),
         Promise.resolve(retrieveBM25Evidence(question, entities, 5))
     ]);
-    const firstChroma = await retrieveChromaEvidence(question, entities, 5, firstHydeText);
+    const firstChroma = await retrieveChromaEvidence(question, entities, 5, firstHydeText).catch(() => []);
 
     // LLM评估（规则明确通过时跳过LLM）
     const firstGrade = await gradeRetrievedEvidenceWithLLM(question, entities, firstLocal, [...firstBm25, ...firstChroma]);
@@ -1960,7 +1818,7 @@ async function retrieveCorrectiveEvidence(question, entities = {}) {
 
     const secondLocal  = retrieveHybridEvidence(rewrite.query, mergedEntities, 8);
     const secondBm25   = retrieveBM25Evidence(rewrite.query, mergedEntities, 5);
-    let   secondChroma = await retrieveChromaEvidence(rewrite.query, mergedEntities, 5, hydeText);
+    let   secondChroma = await retrieveChromaEvidence(rewrite.query, mergedEntities, 5, hydeText).catch(() => []);
     let   secondGrade  = await gradeRetrievedEvidenceWithLLM(question, mergedEntities, secondLocal, [...secondBm25, ...secondChroma]);
 
     // ── 第三轮：grade=incorrect 或 ambiguous → 网络搜索兜底 ──────
@@ -2075,9 +1933,9 @@ async function answerEvidenceChat(question, entities, recentHistory = []) {
     // ── 相关性检查：若检索证据与问题主题完全不相符，直接走 chat ──
     const qKeywords = question.replace(/[？?。，,！!的了吗呢啊是否有哪些多少]/g, ' ')
         .split(/\s+/).filter(w => w.length >= 2);
-    const evidenceText_all = evidence.map(d =>
-        `${d.region}${d.table}${Object.keys(d.row || {}).join('')}`
-    ).join('') + chromaEvidence.map(d => d.text || '').join('');
+    // d.text 已包含 region/table/年份/指标名，直接用于关键词匹配
+    const evidenceText_all = evidence.map(d => d.text || `${d.region}${d.table}`).join('')
+        + chromaEvidence.map(d => d.text || '').join('');
 
     const hasRelevantEvidence = qKeywords.some(kw => evidenceText_all.includes(kw));
 
@@ -2090,7 +1948,7 @@ async function answerEvidenceChat(question, entities, recentHistory = []) {
     }
 
     const evidenceText = evidence.map((doc, i) =>
-        `[${i + 1}] ${doc.table}/${doc.region}/${doc.year}: ${buildRelevantMetricSnapshot(doc.row, question, entities, 10)}`
+        `[${i + 1}] ${doc.table}/${doc.region}/${doc.year}: ${buildRelevantMetricSnapshot(lookupRowForDoc(doc), question, entities, 10)}`
     ).join('\n');
     const chromaText = chromaEvidence.map((doc, i) =>
         `[V${i + 1}] ${doc.text.slice(0, 2000)}`
@@ -2177,7 +2035,7 @@ ${chromaText ? '\n补充证据：\n' + chromaText : ''}${sourceHintLine}
     if (!answer) {
         if (evidence.length) {
             const lines = evidence.slice(0, 4).map(doc => {
-                const snapshot = buildRelevantMetricSnapshot(doc.row, question, entities, 5);
+                const snapshot = buildRelevantMetricSnapshot(lookupRowForDoc(doc), question, entities, 5);
                 return `**${doc.region}（${doc.year}年）**：${snapshot}`;
             });
             answer = lines.join('\n\n');
@@ -2292,12 +2150,6 @@ function ruleBasedDecide(question, entities) {
         return { tool: 'trend_analysis', params: { metric, region: region || '全国', years } };
     }
 
-    // ② 预测："预测/预计/未来"
-    if (/(预测|预计|未来)/.test(q)) {
-        const targetYear = yearMatch ? parseInt(yearMatch[yearMatch.length - 1]) : latestYear + 2;
-        return { tool: 'forecast', params: { metric, region: region || '全国', targetYear } };
-    }
-
     // ③ 对比两年："2022和2023/2022对比2023"
     if (yearMatch && yearMatch.length >= 2 && /(对比|比较|vs|和|与)/.test(q)) {
         const region = entities.regions[0] || '全国';
@@ -2337,12 +2189,11 @@ function ruleBasedDecide(question, entities) {
 function normalizeAgentDecision(decision, entities = {}, question = '') {
     if (!decision || typeof decision !== 'object') return null;
     const tool = normalizeToolName(decision.tool || decision.intent || '');
-    const allowed = new Set(['get_ranking', 'compare', 'forecast', 'point_query', 'trend_analysis', 'evidence_chat', 'chat']);
+    const allowed = new Set(['get_ranking', 'compare', 'point_query', 'trend_analysis', 'evidence_chat', 'chat']);
     if (!allowed.has(tool)) return null;
     const params = { ...(decision.params || {}) };
     if (!params.metric && decision.metric) params.metric = decision.metric;
     if (!params.region && decision.region) params.region = decision.region;
-    if (!params.targetYear && decision.targetYear) params.targetYear = decision.targetYear;
     if (!params.year && decision.year) params.year = decision.year;
     if (!params.years && Array.isArray(decision.years)) params.years = decision.years;
     if (!params.metric && entities.metrics?.[0]) params.metric = entities.metrics[0];
@@ -2350,7 +2201,6 @@ function normalizeAgentDecision(decision, entities = {}, question = '') {
     if (!params.metric && tool !== 'chat' && tool !== 'evidence_chat') params.metric = inferMetric(question);
 
     if (params.year != null && typeof params.year !== 'number') params.year = parseInt(params.year) || 0;
-    if (params.targetYear != null && typeof params.targetYear !== 'number') params.targetYear = parseInt(params.targetYear) || 0;
     if (params.compareYear != null && typeof params.compareYear !== 'number') params.compareYear = parseInt(params.compareYear) || null;
     if (Array.isArray(params.years)) {
         params.years = params.years.map(y => parseInt(y)).filter(Number.isFinite);
@@ -2371,7 +2221,6 @@ async function llmPlanSingleAgent(question, entities, recentHistory = [], lastMe
 
 可用工具：
 - trend_analysis: 趋势/历年/近N年/变化/趋势图
-- forecast: 预测/预估/未来年份
 - get_ranking: 排名/前N/最高/最低
 - compare: 两个地区或两个年份对比
 - point_query: 某地区某年份某指标具体值
@@ -2380,7 +2229,6 @@ async function llmPlanSingleAgent(question, entities, recentHistory = [], lastMe
 
 工具参数：
 trend_analysis {"metric":string,"region":string|null,"years":number[]|null}
-forecast {"metric":string,"region":string|null,"targetYear":number}
 get_ranking {"metric":string,"year":number,"order":"desc"|"asc","topN":number}
 compare {"metric":string,"year":number,"regionA":string,"regionB":string,"compareYear":number|null}
 point_query {"metric":string,"region":string,"year":number}
@@ -2390,7 +2238,7 @@ point_query {"metric":string,"region":string,"year":number}
 2. 用户要数据、图表、导出、报告时，必须选合适工具，不要闲聊。
 3. 用户问”为什么/怎么看/评价/建议/总结”且不是明确数值任务，选 evidence_chat。用户提到报告、白皮书、文献、指数构建方法、人才称号条件、名单内容等，一律选 evidence_chat。
 4. 用户说”那这个呢/同样/换成/继续”时，要结合上下文继承指标、地区和上一轮任务。
-5. 没有地区但问题指全国整体，region 填”全国”；确实没说地区且适合全国，也填”全国”。
+5. 只有用户明确说全国/国家/中国整体/国内整体时，region 才填”全国”；确实没说地区且上下文也无法继承时，不要默认全国，应 needsClarification=true。
 6. 不要编造指标；可用指标示例里没有完全匹配时，选择最接近的指标。
 7. 用户问”各省/全国各地/省份对比/发展情况/排名”这类覆盖所有省份的问题，优先选 get_ranking，不要选 evidence_chat（RAG 只能返回部分省份的片段，会导致数据不全）。
 8. 问题涉及中国以外的国家/地区（如德国、美国、全球、国际对比等），不要选 chat 拒绝，应选 evidence_chat——知识文档库中收录了全球指数报告和白皮书，可能包含相关内容。
@@ -2405,7 +2253,7 @@ ${historyHint || '无'}
 用户问题：${question}
 
 返回格式：
-{"tool":"trend_analysis|forecast|get_ranking|compare|point_query|evidence_chat|chat","params":{},"rationale":"一句话说明为什么这样选","needsClarification":false}`;
+{"tool":"trend_analysis|get_ranking|compare|point_query|evidence_chat|chat","params":{},"rationale":"一句话说明为什么这样选","needsClarification":false}`;
 
     try {
         const raw = await generateFast(prompt, 15000);
@@ -2427,10 +2275,9 @@ async function synthesizeConversationalAnswer(question, draftAnswer, context = {
     if (context.resultType === 'ranking' || context.resultType === 'point' || context.resultType === 'trend') {
         return draftAnswer;
     }
-    // forecast / compare：只有当有报告证据时才走 LLM 润色（丰富背景解读）
-    // 没有报告证据时直接用草稿，避免 LLM 意外改写预测数字或置信区间
+    // compare：只有当有报告证据时才走 LLM 润色（丰富背景解读）
     const hasReportEvidence = Array.isArray(context.reportEvidence) && context.reportEvidence.length > 0;
-    if ((context.resultType === 'forecast' || context.resultType === 'compare') && !hasReportEvidence) {
+    if (context.resultType === 'compare' && !hasReportEvidence) {
         return draftAnswer;
     }
 
@@ -2473,10 +2320,10 @@ async function synthesizeConversationalAnswer(question, draftAnswer, context = {
 3. 如果提供了相关报告内容，可以引用其中的分析背景、政策解读或方法说明来丰富回答，但不要用报告内容替换或矛盾于工具数值。
 4. 语气像专业助手，不要模板腔，不要说”修复/工具调用完成/后台”等技术提示。
 5. 如果结果显示数据缺失，要直接说明缺什么，并给出下一步可问法。
-6. 追问建议只能围绕当前平台已有口径：全国、省份、地级市、年份、已存在指标、趋势、排名、对比、预测、方法说明。
+6. 追问建议只能围绕当前平台已有口径：全国、省份、地级市、年份、已存在指标、趋势、排名、对比、方法说明。
 7. 中文回答，结构清楚，适度简洁。
 8. 列举多个要点时，使用"一、二、三"或"①②③"等中文序号，不要使用"1. 2. 3."的 Markdown 有序列表格式（前端不渲染 Markdown）。
-9. ${(context.resultType === 'forecast' || context.resultType === 'compare') ? '本次回答的数据来源是预测模型（已在草稿中标注），不要在末尾添加"📄 来源"行，不要引用任何报告页码作为数据来源。报告内容仅供背景参考，不作为预测结果的引用依据。' : '如果回答用到了报告内容，在回答末尾单独一行标注来源，格式：📄 来源：《报告名》第N页。如提供了 URL，格式为：📄 来源：《报告名》第N页（/资料/文件名.pdf#page=N）。最多标注3个来源。'}
+9. ${context.resultType === 'compare' ? '本次回答的数据来源以平台结构化数据为准，报告内容仅供背景参考。' : '如果回答用到了报告内容，在回答末尾单独一行标注来源，格式：📄 来源：《报告名》第N页。如提供了 URL，格式为：📄 来源：《报告名》第N页（/资料/文件名.pdf#page=N）。最多标注3个来源。'}
 
 用户问题：${question}
 工具与方法轨迹：${JSON.stringify(context.toolTrace || []).slice(0, 1200)}
@@ -2549,7 +2396,6 @@ function buildContextualSuggestions(question, tool = 'chat') {
     // 高校 / 教育类
     if (/(高校|大学|院校|学生|教师|专任|在校生|录取|教育)/.test(q)) {
         return [
-            `预测${latestYear + 2}年全国普通高校数量`,
             `${latestYear}年各省普通高校数量排名`,
             '近10年全国高校数量趋势',
             '江苏和浙江高校数量对比'
@@ -2570,7 +2416,7 @@ function buildContextualSuggestions(question, tool = 'chat') {
             '全国工业机器人密度近10年趋势',
             `${latestYear}年各省产业结构高级化排名`,
             '江苏和浙江科研指标对比',
-            '预测2026年全国互联网普及度'
+            '全国互联网普及度近10年趋势'
         ];
     }
     // evidence_chat 通用追问建议
@@ -2580,7 +2426,6 @@ function buildContextualSuggestions(question, tool = 'chat') {
     // chat 默认建议
     return [
         `${latestYear}年各省杰青数量前10排名`,
-        `预测${latestYear + 2}年全国普通高校数量`,
         '近5年长江学者趋势',
         '江苏和浙江R&D投入对比'
     ];
@@ -2629,7 +2474,7 @@ ${hasHistory ? `最近对话：\n${historyHint}` : ''}
         citations: [],
         reasoning: ['意图: chat', '模型不可用时降级为能力说明'],
         confidence: 0.75,
-        suggestions: ['查看全国趋势', '预测某省指标', '生成分析报告', '导出表格'],
+        suggestions: ['查看全国趋势', '查看省份排名', '生成分析报告', '导出表格'],
         toolTrace: [{ tool: 'chat', normalizedTool: 'chat', params: {}, success: true, type: 'chat' }]
     };
 }
@@ -2684,35 +2529,10 @@ async function executeTool(decision, entities) {
             };
         }
 
-        // ---- forecast ----
-        if (tool === 'forecast') {
-            const metric      = params.metric || entities.metrics[0] || metricNameList[0];
-            const region      = params.region || entities.regions[0] || (entities._defaultNational ? '全国' : '全国');
-            const targetYear  = params.targetYear || (getLatestYear(rawDataCache.province) + 2);
-            const histData    = getHistoricalData(metric, region);
-            const forecastModel = chooseForecastModel(histData, targetYear, metric);
-            const forecastValue = forecastModel.value;
-            const forecastMeta = buildForecastMeta(histData, targetYear, forecastModel, metric);
-            return {
-                success: true,
-                type: 'forecast',
-                data: {
-                    region,
-                    metric,
-                    year: targetYear,
-                    forecastValue,
-                    history: histData,
-                    forecastModel,
-                    forecastMeta,
-                    confidenceInterval: getForecastInterval(histData, forecastValue, targetYear)
-                }
-            };
-        }
-
         // ---- point_query ----
         if (tool === 'point_query') {
             const metric  = params.metric || entities.metrics[0] || metricNameList[0];
-            const region  = params.region || entities.regions[0] || (entities._defaultNational ? '全国' : '全国');
+            const region  = params.region || entities.regions[0];
             const isNational = region === '全国';
             const isCity  = !isNational && isCityRegion(region);
             const rows    = isNational ? rawDataCache.national : isCity ? rawDataCache.city : rawDataCache.province;
@@ -2726,8 +2546,8 @@ async function executeTool(decision, entities) {
         if (tool === 'trend_analysis') {
             const metric = params.metric || entities.metrics[0] || metricNameList[0];
             
-            // 无指定地区且有全国数据 → 优先用全国表
-            const wantsNationalTrend = entities._defaultNational || params.region === '全国' || entities.regions[0] === '全国';
+            // 只有明确指定全国时才使用全国表
+            const wantsNationalTrend = params.region === '全国' || entities.regions[0] === '全国';
             if (wantsNationalTrend && rawDataCache.national && rawDataCache.national.length) {
                 const natRows = rawDataCache.national;
                 const realKey = findRealKey(natRows, metric) || metric;
@@ -2752,8 +2572,7 @@ async function executeTool(decision, entities) {
             const regionParam = params.region || entities.regions[0];
             const isCity = regionParam && isCityRegion(regionParam);
             const sourceTable = isCity ? rawDataCache.city : rawDataCache.province;
-            const allRegions = [...new Set(sourceTable.map(r => r['地区']))].filter(Boolean);
-            const region = regionParam || allRegions[0] || '广东省';
+            const region = regionParam;
             const requestedYears = (params.years && params.years.length) ? params.years
                                  : (entities.years && entities.years.length) ? entities.years : null;
             const rows    = sourceTable.filter(r => r['地区'] === region);
@@ -2822,47 +2641,6 @@ async function generateAnswer(result, question, type) {
             }
         }
     }
-    else if (type === 'forecast') {
-        const { region, metric, year, forecastValue, history, confidenceInterval, forecastModel, forecastMeta } = result.data;
-        if (!forecastValue) {
-            answer = `⚠️ ${region}的${metric}历史数据不足（${history.length}条），无法预测。`;
-            history.slice(-3).forEach(h => { answer += `\n- ${h.year}年: ${formatValue(h.value)}`; });
-        } else {
-            const last = history[history.length-1];
-            answer = `**${metric} 预测结果**\n\n| 项目 | 数值 |\n|------|------|\n`;
-            answer += `| 预测地区 | ${region} |\n| 预测年份 | ${year} |\n`;
-            if (forecastMeta?.latestActualYear) answer += `| 最新真实年份 | ${forecastMeta.latestActualYear} |\n`;
-            if (forecastMeta?.forecastStep) answer += `| 预测步长 | ${forecastMeta.forecastStep}步（${forecastMeta.forecastType}） |\n`;
-            answer += `| 预测值 | **${formatValue(forecastValue)}** |\n`;
-            if (forecastModel?.methodLabel) answer += `| 预测方法 | ${forecastModel.methodLabel} |\n`;
-            if (confidenceInterval) answer += `| 置信区间 | ${formatValue(confidenceInterval.lower)} - ${formatValue(confidenceInterval.upper)} |\n`;
-            answer += `| 趋势 | ${forecastValue > last.value ? '↑ 上升' : '↓ 下降'} |\n`;
-            answer += `| 置信度 | ${confidenceInterval?.confidenceLabel || '中等'}（${history.length}年数据） |\n\n**历史参考：**\n`;
-            history.slice(-5).forEach(h => { answer += `- ${h.year}年: ${formatValue(h.value)}\n`; });
-            if (forecastMeta?.path?.length) {
-                answer += `\n**预测路径参考：**\n`;
-                forecastMeta.path.forEach(p => {
-                    const suffix = p.year === year ? '目标年' : '中间估计';
-                    answer += `- ${p.year}年: ${formatValue(p.value)}（${suffix}，模型估计）\n`;
-                });
-            }
-            if (forecastModel?.methodReason) {
-                answer += `\n**方法说明：**${forecastModel.methodReason}`;
-                if (forecastMeta?.caution) {
-                    answer += ` ${forecastMeta.caution}`;
-                }
-                if (forecastMeta?.forecastStep > 1) {
-                    answer += ` 因此该结果不是基于真实${year - 1}年数据继续计算，而是从${forecastMeta.latestActualYear}年历史序列直接进行${forecastMeta.forecastStep}步预测。`;
-                }
-                if (forecastModel.backtest) {
-                    answer += ` 最近历史回测 RMSE=${forecastModel.backtest.rmse}`;
-                    if (forecastModel.backtest.mape != null) answer += `，MAPE=${forecastModel.backtest.mape}%`;
-                    answer += `。`;
-                }
-            }
-            citations.push(`[来源: 预测模型/${forecastModel?.methodLabel || '时间序列外推'}/${history.length}年数据]`);
-        }
-    }
     else if (type === 'point') {
         const { region, metric, year, value } = result.data;
         answer = value !== undefined
@@ -2921,21 +2699,13 @@ function buildFollowupSuggestions(question, result, entities) {
     const type = result?.type || '';
     const suggestions = [];
 
-    // Tailor suggestions by analysis type
     if (type === 'trend') {
-        suggestions.push(`预测2026年${region}${cleanMetric}`);
         suggestions.push(`${region}${cleanMetric}年均增长率`);
         suggestions.push(`${latestYear}年各省${cleanMetric}排名`);
         if (entities.regions.length < 2) suggestions.push(`江苏和浙江${cleanMetric}对比`);
-    } else if (type === 'forecast') {
-        suggestions.push(`你是怎么预测的？`);
-        suggestions.push(`${region}${cleanMetric}近10年趋势`);
-        suggestions.push(`${latestYear}年各省${cleanMetric}排名`);
-        suggestions.push(`换一个省份预测同样指标`);
     } else if (type === 'ranking') {
         const topRegion = result?.data?.[0]?.region || '榜首地区';
         suggestions.push(`${topRegion}${cleanMetric}近10年趋势`);
-        suggestions.push(`预测2026年${cleanMetric}排名`);
         suggestions.push(`${cleanMetric}最低5省`);
         suggestions.push(`换一年再看排名`);
     } else if (type === 'compare') {
@@ -2949,31 +2719,56 @@ function buildFollowupSuggestions(question, result, entities) {
         // point_query / evidence_chat / default
         suggestions.push(`${region}${cleanMetric}近10年趋势`);
         suggestions.push(`${latestYear}年各省${cleanMetric}排名`);
-        suggestions.push(`预测2026年${region}${cleanMetric}`);
         if (entities.regions.length < 2) suggestions.push(`江苏和浙江${cleanMetric}对比`);
     }
 
-    return [...new Set(suggestions)].filter(Boolean).slice(0, 4);
+    return sanitizeSuggestionList(suggestions);
 }
 
-function isForecastComparisonQuestion(question, entities = {}) {
-    const q = String(question || '');
-    const detectedRegions = detectMentionedRegions(q);
-    return /(预测|预估|未来|预计)/.test(q)
-        && /(对比|比较|比对|相比|差距|谁高|谁低|领先|和|与|vs)/i.test(q)
-        && ((Array.isArray(entities.regions) && entities.regions.length >= 2) || detectedRegions.length >= 2);
+function isPredictionOrFutureText(text, latestYear = getLatestYear(rawDataCache.province)) {
+    const q = String(text || '');
+    if (/(预测|预估|预计|推测|forecast|predict|projection|明年|后年|下一年|下年|未来)/i.test(q)) return true;
+    const years = (q.match(/20\d{2}/g) || []).map(y => parseInt(y, 10)).filter(Number.isFinite);
+    if (!years.some(y => y > latestYear)) return false;
+    return !/(报告|白皮书|文献|资料|发布|出版|全球智数化人才指数报告)/.test(q);
 }
 
-function isMultiRegionForecastQuestion(question, entities = {}) {
-    const q = String(question || '');
-    if (!/(预测|预估|未来|预计)/.test(q)) return false;
-    const mixedIntent = /(趋势|走势|近[一二两三四五六七八九十\d]+年|排名|前\d+|对比|比较|比对|多少|是多少)/.test(q);
-    const numberedOrSeparated = /(^|[。；;！？?\n\r])\s*(?:第?\d+\s*[\.、，,)]|[（(]\d+[）)])|[。；;！？?\n\r]/.test(q);
-    const metricCount = Array.isArray(entities.metrics) ? entities.metrics.length : extractEntities(q).metrics.length;
-    if (mixedIntent && (numberedOrSeparated || metricCount > 1)) return false;
-    const detectedRegions = detectMentionedRegions(q);
-    const regionCount = Math.max(detectedRegions.length, Array.isArray(entities.regions) ? entities.regions.length : 0);
-    return regionCount >= 2;
+function sanitizeSuggestionList(suggestions = []) {
+    const latestYear = getLatestYear(rawDataCache.province);
+    return [...new Set((suggestions || []).map(s => String(s || '').trim()))]
+        .filter(Boolean)
+        .filter(s => !isPredictionOrFutureText(s, latestYear))
+        .slice(0, 4);
+}
+
+function sanitizeAgentResult(result) {
+    if (!result || typeof result !== 'object') return result;
+    result.suggestions = sanitizeSuggestionList(result.suggestions || []);
+    return result;
+}
+
+function buildUnsupportedPredictionResponse(question) {
+    const latestYear = getLatestYear(rawDataCache.province);
+    return {
+        answer: `平台目前只支持已有年份数据查询、历史趋势、排名和地区对比，不做未来年份预测。当前结构化数据最新到 **${latestYear}年**。\n\n你可以改问：${latestYear}年相关指标排名，或某地区近几年趋势。`,
+        chart: null,
+        citations: [],
+        reasoning: ['意图: 未来预测请求', `处理: 拒绝预测，仅说明已有数据范围（最新${latestYear}年）`],
+        confidence: 1,
+        suggestions: sanitizeSuggestionList([
+            `${latestYear}年各省科学支出水平排名`,
+            `济南市科学支出水平近5年趋势`,
+            `江苏和浙江科学支出水平对比`
+        ]),
+        toolTrace: [{ tool: 'unsupported_prediction', normalizedTool: 'unsupported_prediction', params: {}, success: false }],
+        methodSummary: {
+            type: 'unsupported_prediction',
+            title: '未来预测请求',
+            methodLabel: '范围校验',
+            methodReason: '平台只读取已有年份结构化数据，不对未来年份做外推预测。',
+            params: { question, latestYear }
+        }
+    };
 }
 
 function detectMentionedRegions(question = '') {
@@ -3004,185 +2799,6 @@ function detectMentionedRegions(question = '') {
         add(fullName, q.indexOf(shortName));
     }
     return hits.sort((a, b) => a.at - b.at).map(item => item.name);
-}
-
-function buildForecastResult(metric, region, targetYear) {
-    const history = getHistoricalData(metric, region);
-    const forecastModel = chooseForecastModel(history, targetYear, metric);
-    const forecastValue = forecastModel.value;
-    const forecastMeta = buildForecastMeta(history, targetYear, forecastModel, metric);
-    return {
-        region,
-        metric,
-        year: targetYear,
-        forecastValue,
-        history,
-        forecastModel,
-        forecastMeta,
-        confidenceInterval: getForecastInterval(history, forecastValue, targetYear)
-    };
-}
-
-function answerForecastComparison(question, entities) {
-    const metric = entities.metrics[0] || inferMetric(question);
-    const latestYear = getLatestYear(rawDataCache.province);
-    const targetYear = entities.years.find(y => y >= latestYear) || entities.years[0] || latestYear + 1;
-    const detectedRegions = detectMentionedRegions(question);
-    const [regionA, regionB] = (detectedRegions.length >= 2 ? detectedRegions : entities.regions).slice(0, 2);
-    const a = buildForecastResult(metric, regionA, targetYear);
-    const b = buildForecastResult(metric, regionB, targetYear);
-    const valid = typeof a.forecastValue === 'number' && typeof b.forecastValue === 'number';
-    const diff = valid ? b.forecastValue - a.forecastValue : null;
-    const leader = valid ? (a.forecastValue > b.forecastValue ? regionA : b.forecastValue > a.forecastValue ? regionB : '两地持平') : null;
-    const pct = valid && Math.min(Math.abs(a.forecastValue), Math.abs(b.forecastValue)) > 1e-9
-        ? Math.abs(diff / Math.min(Math.abs(a.forecastValue), Math.abs(b.forecastValue)) * 100).toFixed(2)
-        : 'N/A';
-
-    let answer = `**${targetYear}年 ${regionA} vs ${regionB} ${metric}预测对比**\n\n`;
-    answer += `| 地区 | 预测值 | 预测方法 | 置信区间 | 历史样本 |\n|------|------:|------|------|------|\n`;
-    const row = (item) => {
-        const ci = item.confidenceInterval ? `${formatValue(item.confidenceInterval.lower)} - ${formatValue(item.confidenceInterval.upper)}` : '暂无';
-        return `| ${item.region} | **${formatValue(item.forecastValue)}** | ${item.forecastModel?.methodLabel || '时间序列外推'} | ${ci} | ${item.history.length}年 |\n`;
-    };
-    answer += row(a);
-    answer += row(b);
-    if (valid) {
-        answer += `\n**对比结论：**${leader === '两地持平' ? '两地预测值基本持平' : `${leader}预测值更高`}，差值约 **${formatValue(Math.abs(diff))}**，相对差距约 **${pct}%**。\n`;
-    } else {
-        answer += `\n**对比结论：**至少一方历史数据不足，无法形成可靠预测差值。\n`;
-    }
-    answer += `\n**历史参考：**\n`;
-    [a, b].forEach(item => {
-        answer += `- ${item.region}：`;
-        answer += item.history.slice(-5).map(h => `${h.year}年 ${formatValue(h.value)}`).join('；') || '暂无有效历史数据';
-        answer += `\n`;
-    });
-    answer += `\n**方法说明：**系统先分别抽取两地同一指标的历史序列，分别选择回测误差更稳定的预测方法，再比较两个预测值。该结果是从${latestYear}年附近的最新真实数据向${targetYear}年外推，不是把某一地结果直接套用到另一地。\n`;
-
-    return {
-        answer,
-        chart: null,
-        citations: [
-            `[来源: 预测模型/${regionA}/${metric}/${a.history.length}年数据]`,
-            `[来源: 预测模型/${regionB}/${metric}/${b.history.length}年数据]`
-        ],
-        reasoning: [
-            '意图: forecast_compare',
-            `指标: ${metric}`,
-            `地区: ${regionA}、${regionB}`,
-            `年份: ${targetYear}`,
-            '流程: 分别预测两地，再比较预测值'
-        ],
-        confidence: valid ? 0.88 : 0.55,
-        suggestions: [
-            `${regionA}${metric}近10年趋势`,
-            `${regionB}${metric}近10年趋势`,
-            `${targetYear}年各省${cleanMetricName(metric)}预测排名`,
-            '你是怎么预测的？'
-        ],
-        toolTrace: [
-            { tool: 'forecast', normalizedTool: 'forecast', params: { metric, region: regionA, targetYear }, success: typeof a.forecastValue === 'number', type: 'forecast' },
-            { tool: 'forecast', normalizedTool: 'forecast', params: { metric, region: regionB, targetYear }, success: typeof b.forecastValue === 'number', type: 'forecast' },
-            { tool: 'forecast_compare', normalizedTool: 'forecast_compare', params: { metric, regionA, regionB, targetYear }, success: valid, type: 'forecast_compare' }
-        ],
-        methodSummary: {
-            type: 'forecast_compare',
-            title: `${regionA}与${regionB}${targetYear}年预测对比`,
-            methodLabel: '双地区分别预测 + 差值比较',
-            methodReason: '针对“预测并比对”的复合问题，先分别预测两个地区，再比较预测值、置信区间和历史样本，避免只回答最后一个地区。',
-            params: { metric, regionA, regionB, targetYear },
-            regions: [regionA, regionB],
-            metric,
-            year: targetYear
-        }
-    };
-}
-
-function answerMultiRegionForecast(question, entities) {
-    const metric = entities.metrics[0] || inferMetric(question);
-    const latestYear = getLatestYear(rawDataCache.province);
-    const targetYear = entities.years.find(y => y >= latestYear) || entities.years[0] || latestYear + 1;
-    const detectedRegions = detectMentionedRegions(question);
-    const regions = (detectedRegions.length >= 2 ? detectedRegions : entities.regions).slice(0, 8);
-    const items = regions.map(region => buildForecastResult(metric, region, targetYear));
-    const validItems = items.filter(item => typeof item.forecastValue === 'number');
-    const sortedValid = [...validItems].sort((a, b) => b.forecastValue - a.forecastValue);
-
-    let answer = `**${targetYear}年 ${regions.join('、')} ${metric}分别预测**\n\n`;
-    answer += `| 地区 | 预测值 | 趋势 | 预测方法 | 置信区间 | 历史样本 |\n|------|------:|------|------|------|------|\n`;
-    items.forEach(item => {
-        const latestActual = item.history[item.history.length - 1];
-        const trend = latestActual && typeof item.forecastValue === 'number'
-            ? (item.forecastValue > latestActual.value ? '上升' : item.forecastValue < latestActual.value ? '下降' : '持平')
-            : '未知';
-        const ci = item.confidenceInterval ? `${formatValue(item.confidenceInterval.lower)} - ${formatValue(item.confidenceInterval.upper)}` : '暂无';
-        answer += `| ${item.region} | **${formatValue(item.forecastValue)}** | ${trend} | ${item.forecastModel?.methodLabel || '时间序列外推'} | ${ci} | ${item.history.length}年 |\n`;
-    });
-
-    if (validItems.length >= 2) {
-        const leader = sortedValid[0];
-        const low = sortedValid[sortedValid.length - 1];
-        const spread = Math.abs(leader.forecastValue - low.forecastValue);
-        if (spread < 1e-9) {
-            answer += `\n**横向结论：**这些地区预测值基本持平，均约为 **${formatValue(leader.forecastValue)}**。\n`;
-        } else {
-            answer += `\n**横向结论：**${leader.region}预测值最高（${formatValue(leader.forecastValue)}），${low.region}预测值最低（${formatValue(low.forecastValue)}），最高与最低差值约 **${formatValue(spread)}**。\n`;
-        }
-    }
-
-    answer += `\n**历史参考：**\n`;
-    items.forEach(item => {
-        answer += `- ${item.region}：`;
-        answer += item.history.slice(-5).map(h => `${h.year}年 ${formatValue(h.value)}`).join('；') || '暂无有效历史数据';
-        answer += `\n`;
-    });
-    answer += `\n**方法说明：**这是一个多地区同指标预测任务。系统先识别所有地区，再对每个地区分别抽取历史序列、选择回测误差更稳定的预测模型，最后把预测值放在同一张表里对照，不会只回答其中一个地区。\n`;
-
-    return {
-        answer,
-        chart: null,
-        citations: items.map(item => `[来源: 预测模型/${item.region}/${metric}/${item.history.length}年数据]`),
-        reasoning: [
-            '意图: multi_region_forecast',
-            `指标: ${metric}`,
-            `地区: ${regions.join('、')}`,
-            `年份: ${targetYear}`,
-            '流程: 识别多个地区，逐一预测并汇总'
-        ],
-        confidence: validItems.length === items.length ? 0.88 : 0.62,
-        suggestions: [
-            `${targetYear}年这些地区预测值排序`,
-            `${regions[0] || '广东省'}${metric}近10年趋势`,
-            `${regions[1] || '山东省'}${metric}近10年趋势`,
-            '你是怎么预测的？'
-        ],
-        toolTrace: [
-            ...items.map(item => ({
-                tool: 'forecast',
-                normalizedTool: 'forecast',
-                params: { metric, region: item.region, targetYear },
-                success: typeof item.forecastValue === 'number',
-                type: 'forecast'
-            })),
-            {
-                tool: 'multi_region_forecast',
-                normalizedTool: 'multi_region_forecast',
-                params: { metric, regions, targetYear },
-                success: validItems.length > 0,
-                type: 'multi_region_forecast'
-            }
-        ],
-        methodSummary: {
-            type: 'multi_region_forecast',
-            title: `${targetYear}年多地区${metric}预测`,
-            methodLabel: '多地区分别预测 + 汇总对照',
-            methodReason: '针对一个问题中包含多个地区的预测任务，逐一执行预测后统一汇总，避免只回答第一个或最后一个地区。',
-            params: { metric, regions, targetYear },
-            regions,
-            metric,
-            year: targetYear
-        }
-    };
 }
 
 function isCorrelationQuestion(question) {
@@ -3334,186 +2950,8 @@ function answerCorrelationAnalysis(question, entities = null) {
 
 function isMethodFollowup(question) {
     const q = String(question || '').trim();
-    if (isForecastMethodOptionQuestion(q)) return false;
-    return /(怎么|如何|为什么|依据|根据|方法|怎么算|怎么得出|怎么预测|用什么模型|什么算法|置信区间|可信|靠谱吗|原理|过程)/.test(q)
-        && /(预测|算|得出|回答|结果|数据|方法|模型|算法|置信|刚才|上面|上一)/.test(q);
-}
-
-function isForecastMethodOptionQuestion(question) {
-    const q = String(question || '').trim();
-    // 如果带有明确重新预测的动作意图，不在这里拦截，交给LLM处理
-    if (/(换.*方法.*预测|用.*方法.*预测|重新预测|换种.*预测|用线性回归|用holt|用漂移|用移动均值)/.test(q)) return false;
-    return /(还有|其他|其它|别的|换一种|换个|能不能用|可不可以用|是否可以用).*(预测|预估|外推|模型|算法|方法)/.test(q)
-        || /(预测|预估|外推).*(还有|其他|其它|别的).*(方法|模型|算法)/.test(q);
-}
-
-// 识别"比较四种方法/所有方法并排"意图
-function isForecastMethodCompareQuestion(question) {
-    const q = String(question || '').trim();
-    return /(比较|对比|并排|所有方法|四种方法|各种方法|哪种方法|哪个方法|方法对比|方法比较).*(预测|方法|结果|模型)/.test(q)
-        || /(预测).*(比较|对比|并排|所有方法|四种|各种)/.test(q)
-        || /四种方法|所有方法|各方法/.test(q);
-}
-
-// 四种方法并排比较预测
-function answerForecastMethodCompare(question, recentHistory = []) {
-    const last = getLastMethodSummary(recentHistory);
-
-    // 从上一轮或当前问题中获取指标、地区、目标年份
-    const entities = extractEntities(question);
-    const metric = entities.metrics[0] || last?.params?.metric || inferMetric(question);
-    const region = entities.regions[0] || last?.params?.region || last?.regions?.[0] || '全国';
-    const latestYear = getLatestYear(rawDataCache.province);
-    const targetYear = entities.years.find(y => y > latestYear)
-        || last?.params?.targetYear
-        || last?.forecastMeta?.latestActualYear && last.forecastMeta.latestActualYear + 2
-        || latestYear + 2;
-
-    const history = getHistoricalData(metric, region);
-    if (!history || history.length < 2) {
-        return {
-            answer: `⚠️ ${region}的${metric}历史数据不足（${history?.length || 0}条），无法进行四种方法比较，至少需要2年数据。`,
-            chart: null, citations: [], reasoning: ['数据不足'], confidence: 0.3,
-            suggestions: [`查看${region}有哪些指标`, '换一个指标试试'],
-            toolTrace: [{ tool: 'forecast_method_compare', normalizedTool: 'forecast_method_compare', params: { metric, region, targetYear }, success: false, type: 'forecast' }]
-        };
-    }
-
-    const allNonNegative = history.every(d => d.value >= 0);
-
-    // 跑四种方法
-    const methods = [
-        { key: 'linear_regression', label: '线性回归趋势预测', fn: linearRegressionForecast,
-          desc: '适合长期趋势平稳、近似线性变化的数据' },
-        { key: 'holt_linear', label: 'Holt线性指数平滑', fn: holtLinearForecast,
-          desc: '适合有趋势但短期有波动的年度序列' },
-        { key: 'drift', label: '平均漂移外推', fn: driftForecast,
-          desc: '适合样本较少或不宜过度拟合的数据' },
-        { key: 'moving_average_trend', label: '近年移动均值趋势外推', fn: movingAverageForecast,
-          desc: '近期走势比早期数据更重要时使用' }
-    ];
-
-    const results = methods.map(m => {
-        let value = m.fn(history, targetYear);
-        if (typeof value === 'number' && allNonNegative) value = Math.max(0, value);
-        const backtest = scoreForecastMethod(history, m.fn);
-        const ci = getForecastInterval(history, value, targetYear);
-        return { ...m, value, backtest, ci };
-    });
-
-    // 标记最优（RMSE最小）
-    const validResults = results.filter(r => typeof r.value === 'number' && !Number.isNaN(r.value));
-    const bestRmse = Math.min(...validResults.map(r => Number.isFinite(r.backtest?.rmse) ? r.backtest.rmse : Infinity));
-    const bestMethod = validResults.find(r => r.backtest?.rmse === bestRmse);
-
-    // 系统自动选的方法
-    const autoModel = chooseForecastModel(history, targetYear, metric);
-
-    let answer = `**${region} ${metric} — 四种预测方法并排比较（目标年份：${targetYear}年）**\n\n`;
-    answer += `| 方法 | 预测值 | 置信区间 | 回测RMSE | 回测MAPE | 推荐 |\n`;
-    answer += `|------|------:|------|------:|------:|:----:|\n`;
-
-    results.forEach(r => {
-        const val = typeof r.value === 'number' && !Number.isNaN(r.value) ? formatValue(r.value) : '数据不足';
-        const ci = r.ci ? `${formatValue(r.ci.lower)} ~ ${formatValue(r.ci.upper)}` : '—';
-        const rmse = r.backtest && Number.isFinite(r.backtest.rmse) ? r.backtest.rmse.toFixed(2) : '—';
-        const mape = r.backtest?.mape != null ? `${(r.backtest.mape * 100).toFixed(2)}%` : '—';
-        const isAuto = autoModel.method === r.key;
-        const recommend = isAuto ? '✅ 系统选择' : '';
-        answer += `| ${r.label} | **${val}** | ${ci} | ${rmse} | ${mape} | ${recommend} |\n`;
-    });
-
-    answer += `\n**系统自动选择：${autoModel.methodLabel}**`;
-    answer += `\n原因：${autoModel.methodReason}\n`;
-
-    if (bestMethod) {
-        answer += `\n**回测误差最小：${bestMethod.label}**（RMSE=${bestMethod.backtest.rmse.toFixed(2)}）`;
-        if (autoModel.method !== bestMethod.key) {
-            answer += `，与系统选择一致` === `，与系统选择一致` ? '' : '';
-        }
-    }
-
-    answer += `\n\n**历史数据参考（近5年）：**\n`;
-    history.slice(-5).forEach(h => { answer += `- ${h.year}年: ${formatValue(h.value)}\n`; });
-
-    answer += `\n**说明：** 四种方法均基于同一历史序列计算，预测值差异反映了各方法对趋势的不同假设。系统默认选择回测误差最小的方法，但你也可以指定某种方法重新预测，例如"用Holt方法预测${region}${metric}"。`;
-
-    const citations = [`[来源: 预测模块/四种方法并排/${region}/${metric}/${history.length}年数据]`];
-    const cleanMetric = cleanMetricName(metric);
-
-    return {
-        answer,
-        chart: null,
-        citations,
-        reasoning: [
-            '意图: forecast_method_compare',
-            `指标: ${metric}`,
-            `地区: ${region}`,
-            `目标年份: ${targetYear}`,
-            `历史样本: ${history.length}年`,
-            `系统选择: ${autoModel.methodLabel}`
-        ],
-        confidence: 0.92,
-        suggestions: [
-            `用线性回归预测${region}${cleanMetric}`,
-            `用Holt方法预测${region}${cleanMetric}`,
-            `${region}${cleanMetric}近10年趋势`,
-            `${targetYear}年各省${cleanMetric}排名`
-        ],
-        toolTrace: [{
-            tool: 'forecast_method_compare',
-            normalizedTool: 'forecast_method_compare',
-            params: { metric, region, targetYear, historyLength: history.length },
-            success: true,
-            type: 'forecast'
-        }],
-        methodSummary: {
-            type: 'forecast_method_compare',
-            title: `${region} ${metric} 四种方法比较`,
-            methodLabel: '四种时间序列方法并排比较',
-            methodReason: '同时运行线性回归、Holt指数平滑、平均漂移、移动均值四种方法，通过回测误差横向对比，帮助用户理解不同假设下的预测差异。',
-            params: { metric, region, targetYear }
-        }
-    };
-}
-
-function answerForecastMethodOptions(question, recentHistory = []) {
-    const last = getLastMethodSummary(recentHistory);
-    const current = last?.type === 'forecast'
-        ? `上一轮预测使用的是 **${last.methodLabel || '时间序列外推'}**。`
-        : '你上一轮不是预测任务，所以我不应该把这个问题强行接到上一轮趋势分析上。';
-    const answer = `${current}
-
-可以，当前系统里已经内置了多种预测思路，不是只有一种：
-
-| 方法 | 适合情况 | 优点 | 注意点 |
-|------|------|------|------|
-| 线性回归趋势预测 | 长期变化比较平稳 | 解释直观，能看出长期方向 | 遇到短期突变时可能反应慢 |
-| Holt 线性指数平滑 | 有趋势但也有波动 | 会平滑噪声，适合年度序列 | 参数会影响结果 |
-| 平均漂移外推 | 样本较少或趋势不宜过拟合 | 稳健，不容易过度拟合 | 对结构性拐点不敏感 |
-| 近年移动均值趋势外推 | 近期走势比早期更重要 | 更重视近几年变化 | 如果最近异常，会被放大 |
-
-现在默认做法是：先让这些方法都试算，再用最近历史回测误差选择更稳的一个，所以不是写死某一种模型。
-
-如果你希望更进一步，我可以继续加一个“指定预测方法”能力，例如你问：  
-“用线性回归预测山东省2025年普通高校数量”  
-系统就不再自动选模型，而是按你指定的方法重算，并把不同方法的结果并排比较。`;
-
-    return {
-        answer,
-        chart: null,
-        citations: ['[来源: 预测模块/内置时间序列方法]'],
-        reasoning: ['意图: forecast_method_options', '识别为预测方法体系追问', '未强行继承上一轮非预测任务'],
-        confidence: 0.94,
-        suggestions: ['比较四种方法的预测结果', '用线性回归重新预测', '解释Holt线性指数平滑', '预测2026年全国工业机器人密度'],
-        toolTrace: [{
-            tool: 'forecast_method_options',
-            normalizedTool: 'forecast_method_options',
-            params: { lastType: last?.type || null },
-            success: true,
-            type: 'method_chat'
-        }]
-    };
+    return /(怎么|如何|为什么|依据|根据|方法|怎么算|怎么得出|用什么模型|什么算法|可信|靠谱吗|原理|过程)/.test(q)
+        && /(算|得出|回答|结果|数据|方法|模型|算法|刚才|上面|上一)/.test(q);
 }
 
 function buildMethodSummary(result, decision) {
@@ -3526,19 +2964,7 @@ function buildMethodSummary(result, decision) {
         success: !!result?.success
     };
 
-    if (result?.type === 'forecast') {
-        const model = data.forecastModel || {};
-        const meta = data.forecastMeta || {};
-        summary.title = `${data.region || '指定地区'} ${data.metric || '指标'} ${data.year || ''}年预测`;
-        summary.methodLabel = model.methodLabel || '时间序列外推';
-        summary.methodReason = model.methodReason || '基于历史年度序列进行趋势外推。';
-        summary.historyYears = Array.isArray(data.history) ? data.history.map(d => d.year) : [];
-        summary.historyCount = summary.historyYears.length;
-        summary.forecastValue = data.forecastValue;
-        summary.confidenceInterval = data.confidenceInterval || null;
-        summary.backtest = model.backtest || null;
-        summary.forecastMeta = meta;
-    } else if (result?.type === 'trend') {
+    if (result?.type === 'trend') {
         summary.title = `${data.region || '指定地区'} ${data.metric || '指标'}趋势分析`;
         summary.methodLabel = '年度序列趋势分析';
         summary.methodReason = '按年份提取有效观测值，计算起止变化、年均变化，并绘制趋势线。';
@@ -3574,12 +3000,12 @@ function answerMethodFollowup(question, recentHistory) {
     const last = getLastMethodSummary(recentHistory);
     if (!last) {
         return {
-            answer: "**方法说明**\n\n我还没有拿到上一轮可解释的分析结果，所以不会直接编一个预测过程。\n\n你可以先问：`预测2026年山东省普通高校数量`。我完成预测后，再问`你是怎么预测的`，我会基于上一轮的工具记录解释所用模型、历史样本、回测误差和置信区间。",
+            answer: "**方法说明**\n\n我还没有拿到上一轮可解释的分析结果。你可以先查询趋势、排名、对比或定点数据，再问“你是怎么分析的”，我会基于上一轮的工具记录说明口径和计算过程。",
             chart: null,
             citations: [],
             reasoning: ['识别为方法追问', '未找到上一轮工具记录'],
             confidence: 0.95,
-            suggestions: ['预测2026年山东省普通高校数量', '2024年各省普通高校数量排名', '山东省普通高校数量近5年趋势'],
+            suggestions: ['2024年各省普通高校数量排名', '山东省普通高校数量近5年趋势', '江苏和浙江R&D投入对比'],
             toolTrace: []
         };
     }
@@ -3587,41 +3013,10 @@ function answerMethodFollowup(question, recentHistory) {
     let answer = `**${last.title || '上一轮分析'}的方法说明**\n\n`;
     answer += `| 项目 | 说明 |\n|------|------|\n`;
     answer += `| 分析类型 | ${last.methodLabel || '结构化数据分析'} |\n`;
-    if (last.type === 'forecast') {
-        const meta = last.forecastMeta || {};
-        if (meta.latestActualYear) answer += `| 最新真实年份 | ${meta.latestActualYear} |\n`;
-        if (meta.forecastStep) answer += `| 预测步长 | ${meta.forecastStep}步（${meta.forecastType || '预测'}） |\n`;
-        answer += `| 预测值 | ${formatValue(last.forecastValue)} |\n`;
-        if (last.confidenceInterval) {
-            answer += `| 置信区间 | ${formatValue(last.confidenceInterval.lower)} - ${formatValue(last.confidenceInterval.upper)} |\n`;
-        }
-        if (last.historyCount) {
-            const years = last.historyYears && last.historyYears.length
-                ? `${Math.min(...last.historyYears)}-${Math.max(...last.historyYears)}`
-                : `${last.historyCount}年`;
-            answer += `| 历史样本 | ${years}，共${last.historyCount}个年度观测 |\n`;
-        }
-        if (last.backtest) {
-            answer += `| 回测误差 | RMSE=${last.backtest.rmse}${last.backtest.mape != null ? `，MAPE=${last.backtest.mape}%` : ''} |\n`;
-        }
-    }
     answer += `\n**具体过程：**\n`;
-    if (last.type === 'forecast') {
-        answer += `1. 先按地区、指标抽取历史年度数据，并过滤空值/非数值。\n`;
-        answer += `2. 同时试算多种轻量时间序列方法：线性回归趋势、Holt线性指数平滑、平均漂移外推、近年移动均值趋势外推。\n`;
-        answer += `3. 用最近历史点做回测，比较误差，选择当前数据上更稳的方法。\n`;
-        answer += `4. 对计数、比例、强度类指标做合理约束，并基于残差波动给出置信区间。\n\n`;
-        if (last.forecastMeta?.path?.length) {
-            answer += `**预测路径：**\n`;
-            last.forecastMeta.path.forEach(p => {
-                answer += `- ${p.year}年: ${formatValue(p.value)}（模型估计）\n`;
-            });
-            answer += `\n`;
-        }
-        if (last.forecastMeta?.forecastStep > 1) {
-            answer += `**关键说明：**没有使用真实中间年份数据。该结果是从${last.forecastMeta.latestActualYear}年最新真实值出发，直接向后${last.forecastMeta.forecastStep}步外推；中间年份只作为模型路径参考。\n\n`;
-        }
-    }
+    answer += `1. 根据用户问题识别地区、年份和指标。\n`;
+    answer += `2. 在平台结构化数据中定位对应表和字段。\n`;
+    answer += `3. 按查询类型执行趋势、排名、对比或定点取值，并生成可追溯结果。\n\n`;
     answer += `**为什么用这个方法：**${last.methodReason || '该方法与当前数据结构和问题意图匹配。'}`;
 
     return {
@@ -3631,7 +3026,7 @@ function answerMethodFollowup(question, recentHistory) {
         reasoning: ['识别为方法追问', `继承上一轮: ${last.type || 'analysis'}`, `方法: ${last.methodLabel || '结构化分析'}`],
         confidence: 0.96,
         confidenceInterval: last.confidenceInterval || null,
-        suggestions: ['换一个省份继续预测', '查看该指标近5年趋势', '比较江苏和浙江同一指标'],
+        suggestions: ['查看该指标近5年趋势', '比较江苏和浙江同一指标', '查看最新年份排名'],
         toolTrace: [{
             tool: 'explain_method',
             normalizedTool: 'explain_method',
@@ -3684,7 +3079,7 @@ async function llmDecideAction(question, recentHistory = [], lastMethod = null) 
 
     // 话题不连续时不传上一轮方法摘要（避免错误继承指标/地区）
     const lastMethodText = (isContinued && lastMethod)
-        ? `上一轮分析：${lastMethod.type}，指标=${lastMethod.params?.metric || ''}，地区=${lastMethod.params?.region || lastMethod.regions?.[0] || ''}，年份=${lastMethod.params?.targetYear || lastMethod.params?.year || ''}`
+        ? `上一轮分析：${lastMethod.type}，指标=${lastMethod.params?.metric || ''}，地区=${lastMethod.params?.region || lastMethod.regions?.[0] || ''}，年份=${lastMethod.params?.year || ''}`
         : '无';
 
     const prompt = `你是山东财经大学科研教育人才数据平台的智能分析助手。请理解用户问题的真实意图，决定下一步行动。
@@ -3698,16 +3093,12 @@ ${allMetrics}
 ## 可用工具
 - trend_analysis: 查看某指标的历年趋势变化
   参数: {"metric":"指标名","region":"地区或全国","years":[年份数组，近N年]}
-- forecast: 预测某指标未来某年的值
-  参数: {"metric":"指标名","region":"地区或全国","targetYear":年份数字}
 - get_ranking: 某年份某指标的省份排名
   参数: {"metric":"指标名","year":年份数字,"order":"desc或asc","topN":数字}
 - compare: 两个地区或两个年份的指标对比
   参数: {"metric":"指标名","year":年份,"regionA":"地区A","regionB":"地区B","compareYear":null或年份}
 - point_query: 查询某地区某年份某指标的具体数值
   参数: {"metric":"指标名","region":"地区","year":年份数字}
-- forecast_compare: 比较四种预测方法的结果并排展示，用于"换种方法/比较方法/哪种方法更好"
-  参数: {"metric":"指标名","region":"地区","targetYear":年份}
 - evidence_chat: 开放式分析、原因解释、建议、评价类问题，也用于多地区（3个以上）对比分析
   参数: {}
 - chat: 闲聊、平台介绍、能力说明
@@ -3716,13 +3107,13 @@ ${allMetrics}
 ## 决策规则
 1. 用户说"换一个地区/换个省份"但没说具体哪里 → action=ask_clarification，clarification="请问您想换哪个省份或地区？"
 2. 用户说"换成山东/换广东省"→ 继承上一轮指标和年份，region换成新地区，直接调工具
-3. 用户说"换种方法预测/用线性回归预测/比较四种方法" → tool=forecast_compare，继承上一轮指标地区年份
-4. 用户说"那浙江呢/江苏的呢" → 继承上一轮指标，region换成提到的省份
-5. 趋势类：含"近N年" → years取近N年的数组；含"历年/所有/全部/多年/所有年份" → years传null表示取全部历史数据；只说"趋势"不带年数 → years传null
-6. 含"为什么/原因/怎么看/评价/建议" → evidence_chat
-7. 含"华东/华南/华北/多个省/几个省的对比/多地区对比" → 必须用evidence_chat，不能用compare（compare只支持两个地区），同时在regions字段列出所有省份
-8. 两个地区对比 → compare工具，regionA和regionB填具体省份全称
-9. 参数不完整且无法从上下文推断 → ask_clarification
+3. 用户说"那浙江呢/江苏的呢" → 继承上一轮指标，region换成提到的省份
+4. 趋势类：含"近N年" → years取近N年的数组；含"历年/所有/全部/多年/所有年份" → years传null表示取全部历史数据；只说"趋势"不带年数 → years传null
+5. 含"为什么/原因/怎么看/评价/建议" → evidence_chat
+6. 含"华东/华南/华北/多个省/几个省的对比/多地区对比" → 必须用evidence_chat，不能用compare（compare只支持两个地区），同时在regions字段列出所有省份
+7. 两个地区对比 → compare工具，regionA和regionB填具体省份全称
+8. 参数不完整且无法从上下文推断 → ask_clarification
+9. 平台不做预测、预估、未来年份外推。用户要求预测或查询超过最新年份的数据时，不要调用趋势/排名/对比工具，应说明超出数据范围。
 10. 普通问候、功能询问 → chat
 
 ## 对话历史
@@ -3767,7 +3158,7 @@ ${question}
 function normalizeLLMDecision(decision, lastMethod = null, recentHistory = []) {
     if (!decision || decision.action !== 'call_tool') return null;
     const tool = normalizeToolName(decision.tool || '');
-    const allowed = ['get_ranking','compare','forecast','point_query','trend_analysis','evidence_chat','chat'];
+    const allowed = ['get_ranking','compare','point_query','trend_analysis','evidence_chat','chat'];
     if (!allowed.includes(tool)) return null;
 
     const params = { ...(decision.params || {}) };
@@ -3775,7 +3166,6 @@ function normalizeLLMDecision(decision, lastMethod = null, recentHistory = []) {
 
     // 规范化年份类型
     if (params.year != null) params.year = parseInt(params.year) || latestYear;
-    if (params.targetYear != null) params.targetYear = parseInt(params.targetYear) || (latestYear + 2);
     if (params.compareYear != null) params.compareYear = parseInt(params.compareYear) || null;
     if (Array.isArray(params.years)) params.years = params.years.map(y => parseInt(y)).filter(Number.isFinite);
 
@@ -3796,10 +3186,7 @@ function normalizeLLMDecision(decision, lastMethod = null, recentHistory = []) {
     if (!params.metric && lastMethod?.params?.metric) params.metric = lastMethod.params.metric;
     if (!params.metric) params.metric = inferMetricFromHistory(recentHistory) || metricNameList[0] || '';
     if (!params.region && tool !== 'get_ranking' && tool !== 'compare') {
-        params.region = lastMethod?.params?.region || lastMethod?.regions?.[0] || '全国';
-    }
-    if (!params.targetYear && tool === 'forecast') {
-        params.targetYear = lastMethod?.params?.targetYear || (latestYear + 2);
+        params.region = lastMethod?.params?.region || lastMethod?.regions?.[0] || '';
     }
     if (!params.year && tool === 'get_ranking') params.year = latestYear;
 
@@ -3959,7 +3346,7 @@ async function runAgent(question, recentHistory = []) {
     // 2. 年份覆盖 / 最新年份
     // 排除上下文引用型问句（"这是哪一年" "刚才那个" 等，应走 LLM + history 回答）
     const isContextRef = /^(这|那|刚才|上面|之前|上一个|它|该).{0,8}(哪|什么|几)/.test(q) || /^(是|在)哪/.test(q);
-    if (!isContextRef && /(最新.*年|覆盖.*年|数据.*年份|年份.*数据|最近.*年份|到.*哪年|数据.*到|截止|最新数据|平台.*年|数据.*范围|年份.*范围)/.test(q) && !/(预测|预计|趋势|近\d)/.test(q)) {
+    if (!isContextRef && /(最新.*年|覆盖.*年|数据.*年份|年份.*数据|最近.*年份|到.*哪年|数据.*到|截止|最新数据|平台.*年|数据.*范围|年份.*范围)/.test(q) && !/(趋势|近\d)/.test(q)) {
         const allYears = [...new Set([...rawDataCache.national, ...rawDataCache.province].map(r => r['年份']).filter(Boolean))].sort();
         const minYear = allYears[0], maxYear = allYears[allYears.length - 1];
         return {
@@ -3967,7 +3354,7 @@ async function runAgent(question, recentHistory = []) {
             chart: null, citations: [],
             reasoning: ['意图: 年份覆盖查询', '直接从数据源返回'],
             confidence: 1.0,
-            suggestions: [`${maxYear}年各省工业机器人密度排名`, `近10年全国普通高校数量趋势`, `预测2026年全国科学支出水平`]
+            suggestions: [`${maxYear}年各省工业机器人密度排名`, `近10年全国普通高校数量趋势`, `江苏和浙江科学支出水平对比`]
         };
     }
 
@@ -3999,7 +3386,7 @@ async function runAgent(question, recentHistory = []) {
     // 5. 能力/功能查询
     if (/(你能做什么|能做什么|有什么功能|功能有哪些|帮助|支持.*功能|怎么用|如何使用|使用说明|help$)/i.test(q)) {
         return {
-            answer: `**平台核心功能：**\n\n| 功能 | 说明 | 示例 |\n|------|------|------|\n| 趋势分析 | 查看指标历年变化 | 近10年工业机器人密度趋势 |\n| 排名 | 省份横向排名 | 2024年各省发明专利前10 |\n| 地区对比 | 两省指标对比 | 江苏和浙江R&D投入对比 |\n| 年度对比 | 同指标不同年份 | 2020和2024年科学支出对比 |\n| 预测 | 时序外推预测 | 预测2026年全国高校数量 |\n| 单点查询 | 精确查某年某省值 | 2023年广东普通高校数量 |\n| 开放分析 | 原因/建议/评价 | 为什么广东机器人密度高 |\n\n**数据范围：** ${metricNameList.length} 个指标，覆盖全国+31省份+200+地级市，最新到 **${latestYear}** 年。`,
+            answer: `**平台核心功能：**\n\n| 功能 | 说明 | 示例 |\n|------|------|------|\n| 趋势分析 | 查看指标历年变化 | 近10年工业机器人密度趋势 |\n| 排名 | 省份横向排名 | 2024年各省发明专利前10 |\n| 地区对比 | 两省指标对比 | 江苏和浙江R&D投入对比 |\n| 年度对比 | 同指标不同年份 | 2020和2024年科学支出对比 |\n| 单点查询 | 精确查某年某省值 | 2023年广东普通高校数量 |\n| 开放分析 | 原因/建议/评价 | 为什么广东机器人密度高 |\n\n**数据范围：** ${metricNameList.length} 个指标，覆盖全国+31省份+200+地级市，最新到 **${latestYear}** 年。`,
             chart: null, citations: [],
             reasoning: ['意图: 功能查询', '直接返回平台能力说明'],
             confidence: 1.0,
@@ -4008,17 +3395,17 @@ async function runAgent(question, recentHistory = []) {
     }
 
     // 6. 某指标是否存在 / 有没有XXX数据
-    if (/(有没有|能查|支持查询|有.*的数据)/.test(q) && !/(趋势|排名|预测|对比|分析)/.test(q)) {
+    if (/(有没有|能查|支持查询|有.*的数据)/.test(q) && !/(趋势|排名|对比|分析)/.test(q)) {
         const entities = extractEntities(q);
         const metric = entities.metrics[0];
         const region = entities.regions[0];
         if (metric) {
             return {
-                answer: `有的，平台包含 **${cleanMetricName(metric)}** 指标，覆盖${region ? `**${region}**及` : ''}全国31个省份，最新到 **${latestYear}** 年。\n\n你可以直接问我：\n- "${region || '广东省'}近10年${cleanMetricName(metric)}趋势"\n- "${latestYear}年各省${cleanMetricName(metric)}排名"\n- "预测2026年${region || '全国'}${cleanMetricName(metric)}"`,
+                answer: `有的，平台包含 **${cleanMetricName(metric)}** 指标，覆盖${region ? `**${region}**及` : ''}全国31个省份，最新到 **${latestYear}** 年。\n\n你可以直接问我：\n- "${region || '广东省'}近10年${cleanMetricName(metric)}趋势"\n- "${latestYear}年各省${cleanMetricName(metric)}排名"\n- "江苏和浙江${cleanMetricName(metric)}对比"`,
                 chart: null, citations: [],
                 reasoning: ['意图: 指标存在性查询', `命中指标: ${metric}`],
                 confidence: 1.0,
-                suggestions: [`${region || '全国'}近10年${cleanMetricName(metric)}趋势`, `${latestYear}年各省${cleanMetricName(metric)}排名`, `预测2026年${region || '全国'}${cleanMetricName(metric)}`]
+                suggestions: [`${region || '全国'}近10年${cleanMetricName(metric)}趋势`, `${latestYear}年各省${cleanMetricName(metric)}排名`, `江苏和浙江${cleanMetricName(metric)}对比`]
             };
         }
     }
@@ -4053,11 +3440,14 @@ async function runAgent(question, recentHistory = []) {
         // 用向量相似度探测知识文档，不依赖关键词
         const probeEntities = await extractEntitiesAsync(q, recentHistory, llmDecision);
         const probeHits = await retrieveChromaEvidence(q, probeEntities, 3).catch(() => []);
-        const hasKnowledgeHit = probeHits.some(d =>
+        const hasChromaHit = probeHits.some(d =>
             (d.metadata?.table === 'knowledge' || d.source === 'ChromaDB') && (d.distance == null || d.distance < 0.55)
         );
+        // Ollama 不可用时向量探针返回空，改用 BM25 兜底（allDocuments 仅含知识文档，有命中即为知识命中）
+        const hasBM25Hit = !hasChromaHit && retrieveBM25Evidence(q, probeEntities, 1).length > 0;
+        const hasKnowledgeHit = hasChromaHit || hasBM25Hit;
         if (hasKnowledgeHit) {
-            console.log('🔄 ask_clarification 转 evidence_chat（ChromaDB 向量命中）:', q);
+            console.log('🔄 ask_clarification 转 evidence_chat（' + (hasChromaHit ? 'ChromaDB 向量' : 'BM25') + '命中）:', q);
             return answerEvidenceChat(q, probeEntities, recentHistory);
         }
         console.log('❓ LLM要求追问:', clarification);
@@ -4076,21 +3466,17 @@ async function runAgent(question, recentHistory = []) {
     if (llmDecision?.action === 'answer_directly' || llmDecision?.tool === 'chat') {
         const probeEntities = await extractEntitiesAsync(q, recentHistory, llmDecision);
         const probeHits = await retrieveChromaEvidence(q, probeEntities, 3).catch(() => []);
-        const hasKnowledgeHit = probeHits.some(d =>
+        const hasChromaHit = probeHits.some(d =>
             (d.metadata?.table === 'knowledge' || d.source === 'ChromaDB') && (d.distance == null || d.distance < 0.55)
         );
+        // Ollama 不可用时向量探针返回空，改用 BM25 兜底
+        const hasBM25Hit = !hasChromaHit && retrieveBM25Evidence(q, probeEntities, 1).length > 0;
+        const hasKnowledgeHit = hasChromaHit || hasBM25Hit;
         if (hasKnowledgeHit) {
-            console.log('🔄 chat 转 evidence_chat（ChromaDB 向量命中）:', q);
+            console.log('🔄 chat 转 evidence_chat（' + (hasChromaHit ? 'ChromaDB 向量' : 'BM25') + '命中）:', q);
             return answerEvidenceChat(q, probeEntities, recentHistory);
         }
         return answerGeneralChat(q, recentHistory);
-    }
-
-    // LLM 决定四种方法并排比较预测
-    if (llmDecision?.tool === 'forecast_compare') {
-        const fakeHistory = [...recentHistory];
-        if (lastMethod) fakeHistory._lastMethod = lastMethod;
-        return answerForecastMethodCompare(q, recentHistory);
     }
 
     // LLM 决定调用 evidence_chat
@@ -4119,9 +3505,6 @@ async function runAgent(question, recentHistory = []) {
         if (!entities.metrics.length && lastMethod?.params?.metric) {
             entities.metrics = [lastMethod.params.metric];
         }
-        if (!entities.regions.length) {
-            entities._defaultNational = true;
-        }
         const ruleDecision = ruleBasedDecide(q, entities);
         if (ruleDecision) {
             toolDecision = ruleDecision;
@@ -4134,32 +3517,47 @@ async function runAgent(question, recentHistory = []) {
     console.log('🔧 执行工具:', toolDecision.tool, JSON.stringify(toolDecision.params).slice(0, 150));
 
     // ── Step 3: 处理特殊多地区情况 ──────────────────────
-    if (llmDecision?.regions?.length > 1 && toolDecision.tool === 'forecast') {
-        const entities = { regions: llmDecision.regions, metrics: [toolDecision.params.metric], years: [] };
-        return answerMultiRegionForecast(q, entities);
-    }
     if (llmDecision?.regions?.length >= 2 && toolDecision.tool === 'compare') {
         toolDecision.params.regionA = llmDecision.regions[0];
         toolDecision.params.regionB = llmDecision.regions[1];
     }
 
-    // ── Step 4: 处理预测对比 ─────────────────────────────
-    const entities_for_special = { 
-        regions: llmDecision?.regions || (toolDecision.params.regionA ? [toolDecision.params.regionA, toolDecision.params.regionB] : [toolDecision.params.region || '全国']),
-        metrics: [toolDecision.params.metric],
-        years: toolDecision.params.targetYear ? [toolDecision.params.targetYear] : []
-    };
-    if (isForecastComparisonQuestion(q, entities_for_special)) {
-        return answerForecastComparison(q, entities_for_special);
-    }
-
     // ── Step 5: 执行工具 + 并联 ChromaDB 检索（方案B）────────
     // 复用 llmDecision.entities（若有）跳过额外 LLM 调用
     const entities = await extractEntitiesAsync(q, recentHistory, llmDecision);
-    // 修正：LLM实体提取可能没有地区，此时应默认全国（而非随机取第一个省）
-    if (!entities.regions.length && !toolDecision.params?.region &&
-        !toolDecision.params?.regionA && !toolDecision.params?.regionB) {
-        entities._defaultNational = true;
+    const explicitlyNational = /(全国|国家|中国整体|国内整体|全国整体|全国范围|全国层面)/.test(q);
+    const inheritedRegion = lastMethod?.params?.region || lastMethod?.regions?.[0] || '';
+    if (toolDecision.params?.region === '全国' && !explicitlyNational && inheritedRegion !== '全国') {
+        toolDecision.params.region = '';
+    }
+    if (!toolDecision.params?.region && explicitlyNational && ['trend_analysis', 'point_query'].includes(toolDecision.tool)) {
+        toolDecision.params.region = '全国';
+    }
+    if (toolDecision.tool === 'compare'
+        && !explicitlyNational
+        && !inheritedRegion
+        && (!toolDecision.params?.regionA || !toolDecision.params?.regionB
+            || (toolDecision.params.regionA === '全国' && toolDecision.params.regionB === '全国'))) {
+        return {
+            answer: '请先指定要对比的地区，例如“山东省2020年和2024年科学支出水平对比”，或“江苏省和浙江省R&D投入对比”。',
+            citations: [],
+            reasoning: ['意图: 需要澄清', '缺失: 对比地区'],
+            suggestions: buildClarificationSuggestions(q, lastMethod),
+            toolTrace: [{ tool: 'clarification', normalizedTool: 'clarification', params: { missing: 'region' }, success: true, type: 'clarification' }]
+        };
+    }
+    if (['trend_analysis', 'point_query'].includes(toolDecision.tool)
+        && !toolDecision.params?.region
+        && !entities.regions.length
+        && !explicitlyNational
+        && !inheritedRegion) {
+        return {
+            answer: '请先指定要查询的地区，例如“全国”“山东省”或“济南市”。',
+            citations: [],
+            reasoning: ['意图: 需要澄清', '缺失: 地区'],
+            suggestions: buildClarificationSuggestions(q, lastMethod),
+            toolTrace: [{ tool: 'clarification', normalizedTool: 'clarification', params: { missing: 'region' }, success: true, type: 'clarification' }]
+        };
     }
     const [result, reportEvidence] = await Promise.all([
         executeTool(toolDecision, entities),
@@ -4214,10 +3612,6 @@ async function runAgent(question, recentHistory = []) {
         };
     }
 
-    const confidenceInterval = result.type === 'forecast'
-        ? (result.data.confidenceInterval || getForecastInterval(result.data.history, result.data.forecastValue, result.data.year))
-        : null;
-
     const toolTrace = [{
         tool: toolDecision.tool,
         normalizedTool: normalizeToolName(toolDecision.tool),
@@ -4251,7 +3645,6 @@ async function runAgent(question, recentHistory = []) {
             `数据: ${result.success ? '✅' : '❌'}`
         ].filter(Boolean),
         confidence: result.success ? 0.9 : 0.5,
-        confidenceInterval,
         suggestions,
         toolTrace,
         methodSummary
@@ -4266,10 +3659,10 @@ function buildClarificationSuggestions(question, lastMethod) {
     const cleanMetric = cleanMetricName(metric);
     const latestYear = getLatestYear(rawDataCache.province);
     return [
-        `预测2026年广东省${cleanMetric}`,
-        `预测2026年山东省${cleanMetric}`,
-        `预测2026年江苏省${cleanMetric}`,
-        `${latestYear}年各省${cleanMetric}排名`
+        `${latestYear}年各省${cleanMetric}排名`,
+        `广东省${cleanMetric}近10年趋势`,
+        `山东省${cleanMetric}近10年趋势`,
+        `江苏和浙江${cleanMetric}对比`
     ].filter(Boolean).slice(0, 4);
 }
 
@@ -4282,12 +3675,6 @@ function splitCompoundQuestions(question) {
     // 长文本且无问号 → 视为单一上下文输入（如粘贴的报告段落），不拆分
     if (text.length > 300 && !/[？?]/.test(text)) return [text];
 
-    if (/(预测|预计|未来).*(对比|比较|比对|vs|VS|差距|谁高|谁低)/.test(text)
-        && detectMentionedRegions(text).length >= 2
-        && extractEntities(text).metrics.length <= 1) {
-        return [text];
-    }
-
     const numbered = text
         .replace(/(^|[\n\r。；;！？?])\s*(?:第?\d+\s*[\.、，,)]|[（(]\d+[）)])/g, '$1||')
         .replace(/\s+(?=\d+\s*[\.、，,)]\s*[\u4e00-\u9fa5])/g, '||')
@@ -4298,17 +3685,11 @@ function splitCompoundQuestions(question) {
         .map(s => s.trim())
         .filter(Boolean);
     const baseParts = hardParts.length > 1 ? hardParts : [text];
-    const intentPattern = /(预测|预估|未来|排名|前\d+|最高|最低|趋势|走势|变化|对比|比较|比对|vs|多少|是多少|评价|分析|说明|建议|怎么看)/i;
+    const intentPattern = /(排名|前\d+|最高|最低|趋势|走势|变化|对比|比较|比对|vs|多少|是多少|评价|分析|说明|建议|怎么看)/i;
     const splitters = /(?:另外|还有|并且|同时|顺便|再帮我|再看|再查|再分析|以及)/g;
     const result = [];
 
     for (const part of baseParts) {
-        if (/(预测|预计|未来).*(对比|比较|比对|vs|VS|差距|谁高|谁低)/.test(part)
-            && detectMentionedRegions(part).length >= 2
-            && extractEntities(part).metrics.length <= 1) {
-            result.push(part);
-            continue;
-        }
         const chunks = part
             .replace(splitters, '||')
             .split('||')
@@ -4365,8 +3746,8 @@ function looksLikeCompoundQuestion(question) {
     // 显式连接词 → 强信号，直接拆分
     if (/另外|还有|顺便|再帮我|再看|再查|再分析/.test(q)) return true;
     // intent 词命中 ≥ 3（避免"趋势分析"之类的单意图问题触发）
-    // 去掉过于泛化的词："分析"、"未来"、"多少"、"是多少"
-    const intentHits = (q.match(/预测|预估|趋势|走势|排名|前\d+|对比|比较|比对|评价/g) || []).length;
+    // 去掉过于泛化的词："分析"、"多少"、"是多少"
+    const intentHits = (q.match(/趋势|走势|排名|前\d+|对比|比较|比对|评价/g) || []).length;
     const metricHits = extractEntities(q).metrics.length;
     // 需要 intentHits >= 3，或 intentHits >= 2 且 metricHits >= 2（不同指标不同意图）
     return (intentHits >= 3) || (intentHits >= 2 && metricHits >= 2);
@@ -4389,11 +3770,9 @@ async function planCompoundQuestions(question, history = []) {
 要求：
 1. 不要回答问题，只做任务拆解。
 2. 如果是单一指标、单一意图的问题（例如”近5年杰青数量趋势”、”山东AI人才趋势分析”），必须保留为 1 个 task，不得拆分。
-3. 如果一句话包含不同意图或不同指标，例如”预测山东高校数量。给我广东机器人密度趋势”，必须拆成多个 task。
-4. 如果是同一指标同一意图的多地区问题，例如”分别预测广东、山东、山西2025年高校数量”，保留为一个 task。
-5. 如果是”预测山东并和江苏比对”这种同一指标的预测对比，也保留为一个 task。
-6. task.question 必须是用户原意的自然语言短句，不要补造数据，不要合并不同指标。
-7. 最多 6 个任务。拿不准时宁可少拆，不可过拆。
+3. 如果一句话包含不同意图或不同指标，例如”山东高校数量排名。给我广东机器人密度趋势”，必须拆成多个 task。
+4. task.question 必须是用户原意的自然语言短句，不要补造数据，不要合并不同指标。
+5. 最多 6 个任务。拿不准时宁可少拆，不可过拆。
 
 可用指标示例：${metricHints}
 最近上下文：
@@ -4402,7 +3781,7 @@ ${historyHint || '无'}
 用户输入：${text}
 
 返回格式：
-{"tasks":[{"question":"...","intent":"forecast|trend|ranking|compare|point|chat","regions":[],"metric":"","years":[]}]}`
+{"tasks":[{"question":"...","intent":"trend|ranking|compare|point|chat","regions":[],"metric":"","years":[]}]}`
 
     for (let i = 0; i < 2; i++) {
         try {
@@ -4422,6 +3801,9 @@ ${historyHint || '无'}
     return fallback;
 }
 async function runAgentBatch(question, history = []) {
+    if (isPredictionOrFutureText(question)) {
+        return buildUnsupportedPredictionResponse(question);
+    }
     const metricDetails = answerAllMetricDetails(question.trim(), buildMetricDetailEntitiesWithContext(question.trim(), history));
     if (metricDetails) return metricDetails;
     const correlationAnalysis = answerCorrelationAnalysis(question.trim(), extractEntities(question.trim()));
@@ -4479,7 +3861,7 @@ async function runAgentBatch(question, history = []) {
             type: 'compound_question',
             title: '多问题拆解分析',
             methodLabel: '问题拆解 + 顺序 Agent 调用 + 结果合并',
-            methodReason: '用户一次输入中包含多个独立意图时，系统先拆成子问题，再逐个调用检索、排名、趋势、对比或预测工具，最后合并为完整回答。',
+            methodReason: '用户一次输入中包含多个独立意图时，系统先拆成子问题，再逐个调用检索、排名、趋势或对比工具，最后合并为完整回答。',
             params: { question, parts }
         }
     };
@@ -4493,7 +3875,7 @@ app.post('/api/agent', async (req, res) => {
     if (!cleanSessionId) return res.status(400).json({ error: 'sessionId格式不合法' });
     try {
         const history = getSessionHistory(cleanSessionId);
-        const result = await runAgentBatch(question.trim(), history);
+        const result = sanitizeAgentResult(await runAgentBatch(question.trim(), history));
         pushSessionHistory(cleanSessionId, 'user', question.trim());
         pushSessionHistory(cleanSessionId, 'assistant', result.answer, {
             methodSummary: result.methodSummary || null,
@@ -4501,7 +3883,7 @@ app.post('/api/agent', async (req, res) => {
             confidenceInterval: result.confidenceInterval || null,
             citations: result.citations || []
         });
-        res.json(result);
+        res.json(sanitizeAgentResult(result));
     } catch (err) {
         console.error('Agent 错误:', err);
         res.status(500).json({ error: err.message, answer: '抱歉，出现错误，请稍后再试。', citations: [], reasoning: ['处理异常', err.message] });
@@ -4547,7 +3929,7 @@ app.post('/api/agent/stream', async (req, res) => {
             const anchor = followupContext.slice(0, 300);
             effectiveQuestion = `（以下是用户想追问的原始对话：${anchor}）\n\n基于上述对话，用户的新问题是：${effectiveQuestion}`;
         }
-        const result = await runAgentBatch(effectiveQuestion, history);
+        const result = sanitizeAgentResult(await runAgentBatch(effectiveQuestion, history));
         clearInterval(statusTimer);
 
         // 流式推送答案文字（4字一批，10ms 间隔 ≈ 400字/秒，视觉流畅）
@@ -4632,6 +4014,7 @@ app.post('/api/scatter', async (req, res) => {
         }
         res.json({ data, xName: xMetric, yName: yMetric, table: tableName });
     } catch (err) {
+        console.error('[/api/scatter 500]', err);
         res.status(500).json({ error: err.message });
     }
 });

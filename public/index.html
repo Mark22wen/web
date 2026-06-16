@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>山东财经大学 · 科研教育人才一体化平台</title>
+    <title>山东财经大学 · 教育科技人才一体化平台</title>
     <link rel="icon" type="image/png" href="images/sdufe-logo.png?v=20260603">
     <link rel="apple-touch-icon" href="images/sdufe-logo.png?v=20260603">
     <link rel="stylesheet" href="style.css">
@@ -83,6 +83,9 @@
     <symbol id="ico-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
     </symbol>
+    <symbol id="ico-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 .6 1.65 1.65 0 0 0-.33 1.05V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.05-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-.6 1.65 1.65 0 0 0 .33-1.05V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.38.43.67.8.8.17.06.36.1.55.1H21a2 2 0 1 1 0 4h-.09A1.65 1.65 0 0 0 19.4 15Z"/>
+    </symbol>
     <symbol id="ico-chevdown" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <polyline points="6 9 12 15 18 9"/>
     </symbol>
@@ -101,29 +104,71 @@
 <!-- ========== LANDING PAGE — 仅保留封面 ========== -->
 <div id="landing-page" class="landing-page">
 
-    <section id="sdufe-cover" class="sdufe-cover" aria-label="山东财经大学科研教育人才数据平台封面">
-        <div class="sdufe-cover-bgword"><span>S</span><span>D</span><span>U</span><span>F</span><span>E</span></div>
+    <section id="sdufe-cover" class="sdufe-cover" aria-label="山东财经大学教育科技人才一体化平台封面">
+        <!-- 背景装饰 -->
         <div class="sdufe-relief relief-network" aria-hidden="true">
             <span></span><span></span><span></span><span></span><span></span><span></span>
         </div>
-        <div class="sdufe-cover-wave-field" aria-hidden="true"></div>
-        <div class="sdufe-cover-light-sweep" aria-hidden="true"></div>
-        <div class="sdufe-relief relief-seal">
-            <img class="cover-seal-logo" src="images/sdufe-logo.png" alt="山东财经大学校徽">
+        <!-- 背景指标浮层 -->
+        <div class="cover-bg-indicators" aria-hidden="true">
+            <!-- 左外列 -->
+            <span class="cbi cbi-1"></span>
+            <span class="cbi cbi-2"></span>
+            <span class="cbi cbi-3"></span>
+            <span class="cbi cbi-4"></span>
+            <span class="cbi cbi-10"></span>
+            <!-- 左内列 -->
+            <span class="cbi cbi-l2a"></span>
+            <span class="cbi cbi-l2b"></span>
+            <span class="cbi cbi-l2c"></span>
+            <span class="cbi cbi-l2d"></span>
+            <!-- 左中列（新增） -->
+            <span class="cbi cbi-l3a"></span>
+            <span class="cbi cbi-l3b"></span>
+            <span class="cbi cbi-l3c"></span>
+            <span class="cbi cbi-l3d"></span>
+            <!-- 右中列（新增） -->
+            <span class="cbi cbi-r3a"></span>
+            <span class="cbi cbi-r3b"></span>
+            <span class="cbi cbi-r3c"></span>
+            <span class="cbi cbi-r3d"></span>
+            <!-- 右内列 -->
+            <span class="cbi cbi-r2a"></span>
+            <span class="cbi cbi-r2b"></span>
+            <span class="cbi cbi-r2c"></span>
+            <span class="cbi cbi-r2d"></span>
+            <!-- 右外列 -->
+            <span class="cbi cbi-5"></span>
+            <span class="cbi cbi-6"></span>
+            <span class="cbi cbi-7"></span>
+            <span class="cbi cbi-8"></span>
+            <span class="cbi cbi-9"></span>
+            <!-- 合成指数（突出显示） -->
+            <span class="cbi cbi-sum">教育科技<br>人才一体化指数</span>
         </div>
-        <button id="darkModeToggleCover" class="sdufe-cover-dark-btn" type="button" aria-label="切换夜间模式">
-            <svg width="14" height="14" id="dark-icon-cover"><use href="#ico-moon"/></svg>
-            <span id="dark-label-cover">夜间</span>
-        </button>
-        <div class="sdufe-cover-content">
-            <div class="sdufe-cover-kicker">SHANDONG UNIVERSITY OF FINANCE AND ECONOMICS</div>
-            <h1>科研教育人才一体化数据平台</h1>
-            <p>面向省域、城市与全国指标的智能分析入口</p>
+        <!-- 封面主内容 -->
+        <div class="sdufe-cover-body">
+            <h1 class="sdufe-cover-title">教育科技人才一体化平台</h1>
+            <!-- 登录区（预留） -->
+            <div class="cover-login-card">
+                <div class="cover-login-field">
+                    <input id="cover-username" type="text" class="cover-login-input" placeholder="请输入用户名" autocomplete="username">
+                </div>
+                <div class="cover-login-field">
+                    <input id="cover-password" type="password" class="cover-login-input" placeholder="请输入密码" autocomplete="current-password">
+                </div>
+                <button class="cover-login-submit" type="button">登 录</button>
+            </div>
+            <!-- Explore 按钮 -->
             <button class="sdufe-slide-enter" type="button" onclick="enterSdufeCover()">
-                <span>Explore →</span>
+                <span>开 始</span>
+                <i class="enter-arrow">›</i>
+                <i class="enter-arrow">›</i>
+                <i class="enter-arrow">›</i>
                 <b></b><b></b><b></b>
             </button>
         </div>
+
     </section>
 
 </div><!-- /landing-page -->
@@ -139,17 +184,20 @@
             <div class="dash-brand">
                 <img src="images/sdufe-logo.png" alt="山东财经大学" class="dash-brand-logo">
                 <div class="dash-brand-info">
-                    <div class="dash-brand-name">科研教育人才一体化平台</div>
-                    <div class="dash-brand-sub">主图表 · 饼图轮播 · 排名对比 · 智能助手</div>
+                    <div class="dash-brand-name">教育科技人才一体化平台</div>
                 </div>
             </div>
         </div>
         <div class="dash-header-right">
             <button class="dash-btn dash-btn-primary" onclick="openRagFullscreen({ returnPage: 'dashboard' })">智能助手</button>
-            <button id="darkModeToggle" class="dash-btn">
-                <svg width="14" height="14" id="dark-icon"><use href="#ico-moon"/></svg>
-                <span id="dark-label">夜间</span>
-            </button>
+            <div class="user-center-wrap" id="user-center-wrap">
+                <button class="user-center-btn" id="user-center-btn" onclick="toggleUserMenu()" title="设置" aria-label="设置">
+                    <svg width="18" height="18"><use href="#ico-settings"/></svg>
+                </button>
+                <div class="user-dropdown" id="user-dropdown" style="display:none;">
+                    <button class="user-dropdown-item" onclick="handleLogout()">退出登录</button>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -164,7 +212,7 @@
             </div>
             <div class="kpi-card">
                 <div class="kpi-value" id="kpi-years">—</div>
-                <div class="kpi-label">年份跨度</div>
+                <div class="kpi-label">年份长度</div>
                 <div class="kpi-delta neutral">省份 · 全国</div>
             </div>
             <div class="kpi-card">
@@ -179,33 +227,22 @@
             </div>
         </div>
 
-        <!-- Sheet select -->
-        <div class="dash-toolbar-card">
-            <label class="toolbar-label">数据工作表
-            </label>
-            <select id="sheet-list" class="sheet-select"></select>
-        </div>
-
         <!-- Main Chart Card -->
         <div class="dash-card" id="section-chart">
             <div class="dash-card-header">
-                <span class="dash-card-title">主图表</span>
+                <span class="dash-card-title">指数分析</span>
                 <div class="dash-card-actions">
                     <div class="tool-pill">
                         <label>类型</label>
                         <select id="chart-type">
-                            <option value="auto">智能</option>
+                            <option value="mixed">混合</option>
                             <option value="area">面积</option>
                             <option value="bar">柱状</option>
                         </select>
                     </div>
-                    <div class="tool-pill">
-                        <label>标题</label>
-                        <input id="chart-title" placeholder="自动" style="width:100px">
-                    </div>
-                    <button id="apply-set" class="action-btn">应用</button>
-                    <button id="reset-set" class="action-btn ghost">重置</button>
-                    <span class="help-dot" title="智能推荐：全国用折线图，省份/地级市用柱状图。自定义轴名称和最大值后点应用生效。">?</span>
+                    <button id="main-pause-carousel" class="action-btn ghost" type="button">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播
+                    </button>
                 </div>
             </div>
             <div class="chart-main-layout">
@@ -214,100 +251,87 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
                         指标列表
                     </h4>
+                    <div class="panel-section">
+                        <label class="panel-label">数据工作表</label>
+                        <select id="sheet-list" class="sheet-select" style="width:100%;margin-top:4px;"></select>
+                    </div>
                     <div id="metric-selector-container" class="panel-section">
                         <label class="panel-label">当前指标</label>
-                        <select id="main-metric-select" style="width:100%;margin-top:4px;"></select>
+                        <select id="main-metric-select"></select>
                     </div>
-                    <div id="group-actions" class="panel-section panel-btn-row">
-                        <button id="select-all" class="mini-btn">全选</button>
+                    <div id="region-search-container" class="panel-section" style="display:none;">
+                        <input type="text" id="region-search" placeholder="搜索地区，Enter/Esc 清空" style="width:100%;">
+                    </div>
+                    <div id="group-actions" class="panel-section panel-btn-grid" style="display:none;">
+                        <button id="select-all"    class="mini-btn">全选</button>
                         <button id="invert-select" class="mini-btn">反选</button>
-                        <button id="reset-select" class="mini-btn">重置</button>
-                        <button id="clear-select" class="mini-btn">清空</button>
-                    </div>
-                    <div id="region-search-container" class="panel-section" style="display:none;gap:6px;align-items:center;">
-                        <input type="text" id="region-search" placeholder="搜索地区" style="flex:1;">
-                        <button id="clear-search-btn" class="mini-btn">清除</button>
-                    </div>
-                    <div id="quick-jump-container" class="panel-section" style="display:none;">
-                        <label class="panel-label">快速跳转</label>
-                        <select id="quick-jump-region" style="width:100%;margin-top:4px;"><option value="">-- 选择地区 --</option></select>
+                        <button id="reset-select"  class="mini-btn">重置</button>
+                        <button id="clear-select"  class="mini-btn">清空</button>
                     </div>
                     <div id="indicator-list" class="indicator-list"></div>
                 </div>
                 <div class="right-chart">
+                    <div id="chart-metric-bar" style="display:none;"></div>
                     <div id="main-chart" style="height:100%;width:100%;"></div>
                 </div>
             </div>
-            <div class="axis-row">
-                <input id="x-name" placeholder="X轴名称">
-                <input id="y-name" placeholder="Y轴名称">
-                <input id="y-max" placeholder="Y轴最大值" type="number" step="any">
-                <div class="export-row">
-                    <span class="export-label">导出</span>
-                    <button id="export-main-png" class="mini-btn">PNG</button>
-                    <button id="export-main-jpg" class="mini-btn">JPG</button>
+        </div>
+
+        <!-- Combined Analysis View: Pie (全国) / Ranking (省份·地级市) -->
+        <div class="dash-card" id="section-analysis-view">
+            <div class="dash-card-header">
+                <span class="dash-card-title" id="av-card-title">总-分结构饼图</span>
+                <div class="dash-card-actions" id="av-card-toolbar">
+                    <div id="av-pie-toolbar" style="display:flex;align-items:center;gap:8px;">
+                        <div class="tool-pill">
+                            <label>指标</label>
+                            <select id="pie-metric-select"></select>
+                        </div>
+                        <div class="tool-pill">
+                            <label>年份</label>
+                            <select id="pie-year-select"></select>
+                        </div>
+                        <button id="pie-pause-carousel" class="action-btn ghost" type="button">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播
+                        </button>
+                    </div>
+                    <div id="advanced-toolbar" style="display:none;"></div>
+                </div>
+            </div>
+            <div class="av-layout">
+                <div class="indicator-panel" id="av-left-panel">
+                    <h4>
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-chart-bar"/></svg>
+                        <span id="av-left-title">省份列表</span>
+                    </h4>
+                    <div class="panel-section">
+                        <label class="panel-label">分析视图</label>
+                        <select id="sheet-list-av" class="sheet-select" style="width:100%;margin-top:4px;"></select>
+                    </div>
+                    <div id="av-pie-left">
+                        <div class="panel-section panel-btn-grid">
+                            <button id="pie-select-all" class="mini-btn">全选</button>
+                            <button id="pie-invert-select" class="mini-btn">反选</button>
+                            <button id="pie-reset-select" class="mini-btn">重置</button>
+                            <button id="pie-clear-select" class="mini-btn">清空</button>
+                        </div>
+                        <div id="pie-province-list" class="indicator-list"></div>
+                    </div>
+                    <div id="av-adv-left" style="display:none;flex-direction:column;flex:1;min-height:0;overflow-y:auto;"></div>
+                </div>
+                <div id="av-right" style="flex:1;min-width:0;">
+                    <div id="av-pie-right">
+                        <div id="pie-chart" style="width:100%;height:460px;"></div>
+                        <div id="pie-status" style="font-size:.75rem;color:var(--c-muted);padding:6px 10px 2px;line-height:1.6;text-align:center;"></div>
+                    </div>
+                    <div id="av-adv-right" style="display:none;flex:1;min-width:0;padding:8px 16px;">
+                        <div id="rank-chart-panel" style="width:100%;height:400px;"></div>
+                        <div id="rank-annotation" class="rank-annotation"></div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Pie Chart Card -->
-        <div class="dash-card pie-card" id="section-pie" style="display:none;">
-            <div class="dash-card-header">
-                <span class="dash-card-title">总-分结构饼图</span>
-                <div class="dash-card-actions">
-                    <div class="tool-pill">
-                        <label>年份</label>
-                        <select id="pie-year-select"></select>
-                        <button id="pie-year-prev" class="icon-btn">◀</button>
-                        <button id="pie-year-next" class="icon-btn">▶</button>
-                    </div>
-                    <div class="tool-pill">
-                        <label>指标</label>
-                        <select id="pie-metric-select"></select>
-                    </div>
-                    <button id="pie-reset-hidden" class="action-btn ghost">
-                        <svg width="12" height="12"><use href="#ico-refresh"/></svg>
-                        重置
-                    </button>
-                    <span class="help-dot" title="左侧省份列表勾选显示单独扇区；取消勾选合并为「已隐藏省份」扇区；图例点击可同步省份面板。">?</span>
-                </div>
-            </div>
-            <div class="pie-layout" style="display:flex;gap:16px;padding:16px;">
-                <div class="indicator-panel" style="width:240px;">
-                    <h4>省份列表</h4>
-                    <div class="panel-section panel-btn-row">
-                        <button id="pie-select-all" class="mini-btn">全选</button>
-                        <button id="pie-invert-select" class="mini-btn">反选</button>
-                        <button id="pie-reset-select" class="mini-btn">重置</button>
-                        <button id="pie-clear-select" class="mini-btn">清空</button>
-                    </div>
-                    <div id="pie-province-list" class="indicator-list" style="max-height:320px;"></div>
-                </div>
-                <div style="flex:1;min-width:0;">
-                <div id="pie-chart" style="width:100%;height:520px;"></div>
-            </div>
-            </div>
-            <div id="pie-status" class="status-bar"></div>
-            <div class="export-footer">
-                <span class="export-label">导出饼图</span>
-                <button id="export-pie-png" class="mini-btn">PNG</button>
-                <button id="export-pie-jpg" class="mini-btn">JPG</button>
-            </div>
-        </div>
-
-        <!-- Advanced Card -->
-        <div class="dash-card advanced-card" id="section-advanced" style="display:none;">
-            <div class="dash-card-header">
-                <span class="dash-card-title">高级分析</span>
-                <div class="dash-card-actions" id="advanced-toolbar"></div>
-            </div>
-            <div id="advanced-content" style="min-height:440px;padding:16px;display:flex;gap:16px;"></div>
-            <div class="export-footer">
-                <span class="export-label">导出</span>
-                <button id="export-adv-png" class="mini-btn">PNG</button>
-                <button id="export-adv-jpg" class="mini-btn">JPG</button>
-            </div>
-        </div>
 
         <!-- Analysis tool cards -->
         <div id="section-scatter" style="display:none;">
@@ -321,7 +345,7 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="7" cy="14" r="4"/><circle cx="16" cy="9" r="6"/><circle cx="19" cy="19" r="2"/></svg>
                     </div>
                     <div class="ace-body">
-                        <div class="ace-title">气泡图·三维联合分析</div>
+                        <div class="ace-title">三维联合分析</div>
                         <div class="ace-desc">X轴、Y轴、气泡大小分别对应三个指标，揭示地区间多维关联</div>
                     </div>
                     <button class="ace-btn analysis-toggle-btn" type="button" data-chart="bubble" aria-expanded="false">
@@ -336,7 +360,7 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-scatter"/></svg>
                     </div>
                     <div class="ace-body">
-                        <div class="ace-title">散点图·双指标关联</div>
+                        <div class="ace-title">双指标关联</div>
                         <div class="ace-desc">选择两个指标，分析地区间的相关性与分布</div>
                     </div>
                     <button class="ace-btn analysis-toggle-btn" type="button" data-chart="scatter" aria-expanded="false">
@@ -351,7 +375,7 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v18M3 8h8M3 12h7M3 16h6M13 8h8M14 12h7M15 16h6"/></svg>
                     </div>
                     <div class="ace-body">
-                        <div class="ace-title">蝴蝶图·双省对比</div>
+                        <div class="ace-title">双省对比</div>
                         <div class="ace-desc">选择两个省份，左右对称展示各指标差异，一眼看出强弱</div>
                     </div>
                     <button class="ace-btn analysis-toggle-btn" type="button" data-chart="butterfly" aria-expanded="false">
@@ -364,12 +388,6 @@
             <div id="analysis-panel" style="display:none;">
                 <div class="analysis-panel-header">
                     <span id="analysis-panel-title">图表分析</span>
-                    <div class="analysis-panel-actions">
-                        <span class="export-label">导出</span>
-                        <button id="export-chart-png" class="mini-btn">PNG</button>
-                        <button id="export-chart-jpg" class="mini-btn">JPG</button>
-                        <button id="close-panel" class="close-btn analysis-close-btn" type="button">收起</button>
-                    </div>
                 </div>
                 <div id="analysis-controls" class="analysis-controls"></div>
                 <div id="analysis-chart" style="height:480px;"></div>
@@ -378,10 +396,12 @@
 
         <!-- Data Table -->
         <div class="dash-card" id="section-table">
-            <div class="dash-card-header" id="table-toggle-header" style="cursor:pointer;" onclick="toggleTableSection()" title="点击展开/收起">
-                <span class="dash-card-title">数据明细表</span>
-                <svg id="table-collapse-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:auto;margin-right:8px;transition:transform .25s;transform:rotate(-90deg)"><path d="M6 9l6 6 6-6"/></svg>
-                <div class="dash-card-actions">
+            <div class="dash-card-header" id="table-toggle-header">
+                <span class="dash-card-title table-section-toggle" onclick="toggleTableSection()" style="cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none;">
+                    数据明细表
+                    <svg id="table-collapse-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform .25s;transform:rotate(-90deg);flex-shrink:0;"><path d="M6 9l6 6 6-6"/></svg>
+                </span>
+                <div class="dash-card-actions" onclick="event.stopPropagation()">
                     <div class="tool-pill">
                         <label>工作表</label>
                         <select id="sheet-list-table" class="sheet-select"></select>
@@ -389,7 +409,6 @@
                     <div class="tool-pill" id="column-selector-btn">
                         <label>列</label>
                         <button id="toggle-column-panel" class="mini-btn">筛选</button>
-                        <span class="help-dot" title="点击「筛选」按钮弹出面板，勾选要显示的列。支持全选/清空/重置。">?</span>
                     </div>
                     <div class="tool-pill">
                         <label>每页</label>
@@ -400,14 +419,6 @@
                         </select>
                     </div>
                     <button id="clear-sort" class="mini-btn">清排序</button>
-                    <button id="reset-table" class="mini-btn">重置</button>
-                    <button id="export-csv" class="action-btn">CSV</button>
-                    <button id="export-excel" class="action-btn">Excel</button>
-                    <button id="print-table" class="mini-btn ghost">
-                        <svg width="13" height="13"><use href="#ico-print"/></svg>
-                        打印
-                    </button>
-                    <span class="help-dot" title="表格列颜色代表数值热力图：颜色越深表示该列数值越高。悬停单元格可查看具体排位百分比。">?</span>
                 </div>
             </div>
             <div class="data-section" id="table-body-section" style="display:none;">
@@ -571,7 +582,11 @@
             </div>
         </section>
 
-        <footer class="dash-footer">© 山东财经大学 科研教育人才一体化平台 · 数据来源：公开统计数据库</footer>
+        <footer class="dash-footer">
+            <div>© 山东财经大学 教育科技人才一体化平台</div>
+            <div>统计与数学学院</div>
+            <div>可信人工智能实验室</div>
+        </footer>
     </div>
 
     <!-- Column panel -->
@@ -597,47 +612,34 @@
             </button>
         </div>
 
-        <button class="new-chat-btn" onclick="startNewSession()">新建对话</button>
-
         <div class="sidebar-section">
-            <div class="sidebar-section-title">对话记录
-            </div>
+            <div class="sidebar-section-title">对话记录</div>
+            <button id="rag-new-session-btn" class="new-session-btn" type="button" onclick="startNewSession()">+ 新建对话</button>
             <div id="rag-session-list" class="session-list"></div>
         </div>
 
         <div class="sidebar-section">
             <div class="sidebar-section-title">快捷提问</div>
             <button class="quick-q" id="sq-trend" onclick="sendRagQuick('近10年工业机器人密度趋势')">近10年工业机器人密度趋势</button>
-            <button class="quick-q" id="sq-forecast" onclick="sendRagQuick('预测普通高校数量')">预测高校数量</button>
+            <button class="quick-q" id="sq-edu-rank" onclick="sendRagQuick('各省普通高校数量排名')">高校数量排名</button>
             <button class="quick-q" id="sq-report" onclick="sendRagQuick('根据全球智数化人才指数报告，中国的智数化人才排名情况')">报告：中国人才排名</button>
             <button class="quick-q" id="sq-city" onclick="sendRagQuick('济南市科技指标')">济南市科技指标</button>
         </div>
 
         <div class="sidebar-footer">
             <button class="sidebar-back-btn" onclick="closeRagFullscreen()">返回数据看板</button>
-            <button class="sidebar-export-btn" onclick="exportCurrentSession()" title="导出当前对话为 Markdown">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                导出对话
-            </button>
         </div>
     </aside>
 
     <!-- Main chat area -->
     <main class="rag-main">
         <div class="rag-topbar">
-            <button class="rag-back-mobile" onclick="closeRagFullscreen()">
-                <svg width="18" height="18"><use href="#ico-back"/></svg>
+            <button class="rag-sidebar-open-btn" id="rag-sidebar-open-btn" onclick="openRagSidebarMobile()" title="展开侧边栏">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
             </button>
             <span class="rag-session-name" id="rag-session-title">数据分析助手</span>
-            <select id="rag-session-select" class="rag-session-select" title="切换对话"></select>
-            <button id="rag-new-top" class="rag-top-action" title="新建对话">
-                <svg width="13" height="13"><use href="#ico-plus"/></svg>
-            </button>
-            <button id="rag-delete-top" class="rag-top-action danger" title="删除当前对话">×</button>
-            <button id="darkModeToggle2" class="rag-dark-btn">
-                <svg width="14" height="14" id="dark-icon2"><use href="#ico-moon"/></svg>
-                <span id="dark-label2">夜间</span>
-            </button>
+            <select id="rag-session-select" class="rag-session-select" aria-label="切换历史对话" title="切换历史对话"></select>
+            <button id="rag-delete-top" class="rag-top-action danger" title="删除当前对话" disabled>删除</button>
         </div>
 
         <div class="rag-messages" id="rag-messages">
@@ -646,20 +648,18 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><use href="#ico-brain"/></svg>
                 </div>
                 <h2>我是你的数据分析助手</h2>
-                <p>查询数据 · 分析趋势 · 对比地区 · 预测未来<br>所有回答均基于平台数据，附带来源溯源。</p>
+                <p>查询数据 · 分析趋势 · 对比地区 · 排名分析<br>所有回答均基于平台数据，附带来源溯源。</p>
                 <div class="rag-welcome-hints">
                     <button class="rag-hint-btn" id="hint-ranking" onclick="sendRagQuick('各省杰青数量排名')">各省杰青数量排名</button>
                     <button class="rag-hint-btn" id="hint-trend" onclick="sendRagQuick('近5年长江学者趋势')">近5年长江学者趋势</button>
-                    <button class="rag-hint-btn" id="hint-forecast" onclick="sendRagQuick('预测普通高校数量')">预测普通高校数量</button>
+                    <button class="rag-hint-btn" id="hint-knowledge" onclick="sendRagQuick('杰青和优青有什么区别？')">杰青与优青的区别</button>
                     <button class="rag-hint-btn" id="hint-compare" onclick="sendRagQuick('江苏vs浙江R&D投入对比')">江苏vs浙江R&D投入对比</button>
                 </div>
             </div>
         </div>
 
         <div class="rag-composer">
-            <div class="rag-hint-bar" id="rag-context-hint">
-                <span>支持上下文追问 · 无地区时默认全国数据</span>
-            </div>
+            <div class="rag-hint-bar" id="rag-context-hint" style="display:none;"></div>
             <div id="rag-queue-badge" style="display:none;font-size:.74rem;color:var(--c-accent);background:rgba(90,103,216,.08);border:1px solid rgba(90,103,216,.2);border-radius:6px;padding:3px 10px;margin-bottom:6px;align-items:center;gap:5px;">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
                 <span></span>
@@ -674,9 +674,13 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
                 </button>
             </div>
-            <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · 支持追问上文</div>
-            <div class="composer-disclaimer">当前内容由 AI 生成，仅供参考</div>
+            <div class="composer-hint">Enter 发送 · Shift+Enter 换行</div>
         </div>
+        <footer class="rag-footer">
+            <div>© 山东财经大学 教育科技人才一体化平台</div>
+            <div>统计与数学学院</div>
+            <div>可信人工智能实验室</div>
+        </footer>
     </main>
 </div>
 
@@ -708,35 +712,6 @@ function updateCarousel() {
 function carouselNext() { c3dIndex = (c3dIndex + 1) % C3D_TOTAL; updateCarousel(); }
 function carouselPrev() { c3dIndex = (c3dIndex - 1 + C3D_TOTAL) % C3D_TOTAL; updateCarousel(); }
 
-// KPI update helper (called from script.js after data loads)
-window.updateKPI = function(data) {
-    const prov = data['省份'] || [];
-    const nat = data['全国'] || [];
-    const city = data['地级市'] || [];
-    
-    const totalRec = prov.length + nat.length + city.length;
-    document.getElementById('kpi-records').textContent = totalRec.toLocaleString();
-    
-    const allYears = [...new Set([...prov, ...nat].map(r => r['年份']).filter(Boolean))].sort();
-    if (allYears.length >= 2) {
-        document.getElementById('kpi-years').textContent = allYears[0] + '–' + allYears[allYears.length - 1];
-    }
-    
-    // 扫描省份表全部行，只要某列在任意行有数值就计入指标
-    const allKeys = new Set();
-    prov.forEach(row => Object.keys(row).forEach(k => allKeys.add(k)));
-    const metCount = [...allKeys].filter(k => {
-        if (k === '年份' || k === '地区') return false;
-        return prov.some(row => {
-            const v = row[k];
-            return v !== null && v !== undefined && v !== '' && !isNaN(Number(v));
-        });
-    }).length;
-    document.getElementById('kpi-metrics').textContent = metCount;
-    
-    const regions = new Set([...prov.map(r => r['地区']), ...city.map(r => r['地区'])].filter(Boolean));
-    document.getElementById('kpi-regions').textContent = regions.size + '+';
-};
 
 window.addEventListener('DOMContentLoaded', () => {
     // Build dots
@@ -760,36 +735,6 @@ window.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // DO NOT add click listeners to darkModeToggle or darkModeToggle2 here.
-    // Those are handled entirely by initDarkMode() in script.js.
-    
-    window.updateDarkIcons = function(dark) {
-        const icon1 = document.getElementById('dark-icon');
-        const lbl1 = document.getElementById('dark-label');
-        const icon2 = document.getElementById('dark-icon2');
-        const lbl2 = document.getElementById('dark-label2');
-        const icon0 = document.getElementById('dark-icon-landing');
-        const lbl0 = document.getElementById('dark-label-landing');
-        const iconCover = document.getElementById('dark-icon-cover');
-        const lblCover = document.getElementById('dark-label-cover');
-        const href = dark ? '#ico-sun' : '#ico-moon';
-        const txt = dark ? '日间' : '夜间';
-        if (iconCover) { const u = iconCover.querySelector('use'); if(u) u.setAttribute('href', href); }
-        if (lblCover) lblCover.textContent = txt;
-        if (icon0) { const u = icon0.querySelector('use'); if(u) u.setAttribute('href', href); }
-        if (lbl0) lbl0.textContent = txt;
-        if (icon1) { const u = icon1.querySelector('use'); if(u) u.setAttribute('href', href); }
-        if (lbl1) lbl1.textContent = txt;
-        if (icon2) { const u = icon2.querySelector('use'); if(u) u.setAttribute('href', href); }
-        if (lbl2) lbl2.textContent = txt;
-    };
-    
-    // Sync icons to saved state (before script.js initDarkMode fires)
-    const savedDark = localStorage.getItem('darkMode') === 'true';
-    if (savedDark) {
-        document.body.classList.add('dark-mode');
-        window.updateDarkIcons(true);
-    }
 });
 </script>
 </body>

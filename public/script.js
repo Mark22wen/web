@@ -1,3 +1,10 @@
+// 自动检测部署子路径：本地开发为空，部署在 /ett2/ 时自动加前缀
+// 取 pathname 第一段作为前缀（如 /ett2），根路径部署时为空字符串
+const API_BASE = (() => {
+    const seg = window.location.pathname.split('/').filter(Boolean)[0];
+    return seg ? '/' + seg : '';
+})();
+
 const _origFetch = window.fetch;
 window.fetch = (url, opts = {}) => {
     opts.headers = { ...(opts.headers || {}), 'ngrok-skip-browser-warning': 'true' };
@@ -56,8 +63,65 @@ function escapeHtml(str) {
     });
 }
 
+function getLatestClientDataYear() {
+    const years = [];
+    if (window.workbook && typeof window.workbook === 'object') {
+        Object.values(window.workbook).forEach(rows => {
+            if (!Array.isArray(rows)) return;
+            rows.forEach(row => {
+                const year = Number(row?.['年份'] ?? row?.['时间']);
+                if (Number.isFinite(year)) years.push(year);
+            });
+        });
+    }
+    return years.length ? Math.max(...years) : 2024;
+}
+
+function isUnsupportedPredictionText(text) {
+    const value = String(text || '');
+    if (/(预测|预估|预计|推测|forecast|predict|projection|明年|后年|下一年|下年|未来)/i.test(value)) return true;
+    const latestYear = getLatestClientDataYear();
+    const years = (value.match(/20\d{2}/g) || []).map(y => parseInt(y, 10)).filter(Number.isFinite);
+    return years.some(year => year > latestYear) && !/(报告|白皮书|文献|资料|发布|出版|全球智数化人才指数报告)/.test(value);
+}
+
+function filterRagSuggestions(suggestions) {
+    return (suggestions || []).map(s => String(s || '').trim()).filter(s => s && !isUnsupportedPredictionText(s));
+}
+
+function sanitizeRagSuggestionHtml(html) {
+    if (!html || !/(rag-suggestion|预测|forecast|predict|未来|明年|后年)/i.test(String(html))) return html;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    tmp.querySelectorAll('.rag-suggestion').forEach(btn => {
+        const text = btn.dataset.question || btn.textContent || '';
+        if (isUnsupportedPredictionText(text)) btn.remove();
+    });
+    tmp.querySelectorAll('.rag-suggestions').forEach(box => {
+        if (!box.querySelector('.rag-suggestion')) box.remove();
+    });
+    return tmp.innerHTML;
+}
+
 function escapeRegex(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Y 轴大数缩写，避免长数字与轴标题重叠
+function fmtAxisNum(v) {
+    if (typeof v !== 'number') return v;
+    const a = Math.abs(v);
+    if (a >= 1e8) return (v / 1e8).toFixed(a >= 1e9 ? 1 : 2).replace(/\.?0+$/, '') + '亿';
+    if (a >= 1e4) return (v / 1e4).toFixed(a >= 1e6 ? 1 : 2).replace(/\.?0+$/, '') + '万';
+    return v;
+}
+// 根据数据最大值动态计算 nameGap（轴标题到刻度的距离）
+function calcYNameGap(maxVal) {
+    const a = Math.abs(maxVal || 0);
+    if (a >= 1e8) return 52;   // "1.23亿" ≈ 5~6字符
+    if (a >= 1e4) return 56;   // "2100万" ≈ 5~6字符
+    if (a >= 1e3) return 52;   // "9,999" ≈ 5字符
+    return 44;
 }
 
 // ======================= Landing Page & RAG 全屏界面 =======================
@@ -95,6 +159,32 @@ function enterSdufeCover() {
     }, 420);
 }
 
+// ===== 用户中心 =====
+function toggleUserMenu() {
+    const dd = document.getElementById("user-dropdown");
+    if (!dd) return;
+    const isOpen = dd.style.display !== 'none';
+    dd.style.display = isOpen ? 'none' : 'block';
+    if (!isOpen) {
+        // 点击外部关闭
+        setTimeout(() => {
+            document.addEventListener("click", closeUserMenuOutside, { once: true });
+        }, 0);
+    }
+}
+function closeUserMenuOutside(e) {
+    const wrap = document.getElementById("user-center-wrap");
+    if (wrap && !wrap.contains(e.target)) {
+        const dd = document.getElementById("user-dropdown");
+        if (dd) dd.style.display = 'none';
+    }
+}
+function handleLogout() {
+    const dd = document.getElementById("user-dropdown");
+    if (dd) dd.style.display = 'none';
+    returnToSdufeCover();
+}
+
 function returnToSdufeCover() {
     const cover = document.getElementById('sdufe-cover');
     if (!cover) return;
@@ -120,6 +210,7 @@ function initSdufeCover() {
     const cover = document.getElementById('sdufe-cover');
     if (!cover || cover._bound) return;
     cover._bound = true;
+    restoreCoverBgFromCache();
     document.body.classList.add('sdufe-cover-active');
 
     const seal = document.getElementById('relief-seal-el') || cover.querySelector('.relief-seal');
@@ -146,7 +237,7 @@ function initSdufeCover() {
         meter = document.createElement('div');
         meter.className = 'sdufe-calibration-meter';
         meter.setAttribute('aria-hidden', 'true');
-        meter.innerHTML = '<span>CALIBRATING DATA SURFACE</span><i></i>';
+        meter.innerHTML = '';
         cover.appendChild(meter);
     }
 
@@ -341,7 +432,7 @@ function forceResizeAllCharts() {
             // Re-render main chart to recompute layout with new container size
             try { if (typeof renderMainChart === 'function' && mainChart && !mainChart.isDisposed?.()) renderMainChart(); } catch(e) {}
             try { if (typeof renderPieChart === 'function' && pieChart && !pieChart.isDisposed?.() && pieAvailableMetrics?.length) renderPieChart(); } catch(e) {}
-            try { if (typeof renderAdvancedChart === 'function' && advancedChart && !advancedChart.isDisposed?.() && advMetrics?.length) renderAdvancedChart(); } catch(e) {}
+            try { if (typeof renderAdvancedChart === 'function' && rankChart && !rankChart.isDisposed?.() && advMetrics?.length) renderAdvancedChart(); } catch(e) {}
         });
     });
     // Extra safety: one more resize after ~250ms for charts that initialize slowly
@@ -350,6 +441,27 @@ function forceResizeAllCharts() {
             try { if (c && !c.isDisposed?.()) c.resize(); } catch(e) {}
         });
     }, 250);
+}
+
+function resizeActiveAnalysisChart() {
+    const panel = document.getElementById('analysis-panel');
+    const chartDom = document.getElementById('analysis-chart');
+    if (!panel?.classList.contains('open') || !chartDom) return;
+    // 动画进行中：跳过 resize，避免移动端地址栏收缩→innerHeight 变化→高度抖动循环
+    if (panel._animating) return;
+    const chart = window.echarts ? echarts.getInstanceByDom(chartDom) : null;
+    if (!chart) return;
+    // 蝴蝶图：以 chartDom 当前 inline height 为准，不覆盖（其高度由 loadChart 按行数计算）
+    if (activeChart === 'butterfly') {
+        const inlineH = parseInt(chartDom.style.height);
+        if (inlineH > 0) {
+            try { chart.resize({ height: inlineH }); } catch(e) {}
+        }
+        return;
+    }
+    // 散点/气泡图：用 viewport 自适应高度
+    const nextH = fitAnalysisPanelToViewport();
+    try { chart.resize({ height: nextH }); } catch(e) {}
 }
 
 function enterDashboard(tab) {
@@ -404,14 +516,14 @@ function enterDashboard(tab) {
         // Route to specific section based on tab
         if (tab === 'pie') {
             setTimeout(() => {
-                const pie = document.getElementById('section-pie');
-                if (pie) { pie.style.display = 'block'; pie.scrollIntoView({behavior:'smooth',block:'start'}); }
+                const av = document.getElementById('section-analysis-view');
+                if (av) av.scrollIntoView({behavior:'smooth',block:'start'});
                 forceResizeAllCharts();
             }, 400);
         } else if (tab === 'scatter') {
             setTimeout(() => {
                 const sc = document.getElementById('section-scatter');
-                if (sc) { sc.style.display = 'block'; sc.scrollIntoView({behavior:'smooth',block:'start'}); openAnalysisPanel('scatter'); }
+                if (sc) { sc.style.display = 'block'; openAnalysisPanel('scatter'); }
                 forceResizeAllCharts();
             }, 400);
         } else if (tab === 'table') {
@@ -499,30 +611,11 @@ function refineRagCapabilityBadges() {
     const caps = document.querySelector('.rag-caps');
     if (!caps || refineRagCapabilityBadges._done) return;
     refineRagCapabilityBadges._done = true;
-    caps.innerHTML = ['多问题拆解', '数据检索', '趋势预测', '方法解释']
+    caps.innerHTML = ['多问题拆解', '数据检索', '趋势分析', '方法解释']
         .map(text => `<span class="rag-cap-chip">${escapeHtml(text)}</span>`)
         .join('');
 }
 
-function initSheetSwitchGuide() {
-    const toolbar = document.querySelector('.dash-toolbar-card');
-    const select = document.getElementById('sheet-list');
-    if (!toolbar || !select || toolbar.querySelector('.sheet-switch-guide')) return;
-    if (!select.parentElement?.classList.contains('sheet-select-wrap')) {
-        const wrap = document.createElement('span');
-        wrap.className = 'sheet-select-wrap';
-        select.parentNode.insertBefore(wrap, select);
-        wrap.appendChild(select);
-    }
-    const guide = document.createElement('div');
-    guide.className = 'sheet-switch-guide';
-    guide.innerHTML = `
-        <span class="guide-pulse-dot"></span>
-        <span>在这里切换全国、省份和地级市数据表</span>
-    `;
-    toolbar.appendChild(guide);
-    select.title = '切换全国、省份、地级市工作表';
-}
 
 function ensureDashboardAnalysisVisible() {
     const sc = document.getElementById('section-scatter');
@@ -584,8 +677,6 @@ function openRagFullscreen(options = {}) {
         } else {
             startNewSession();
         }
-        const hint = document.getElementById('rag-context-hint');
-        if (hint) hint.innerHTML = '<span>新对话已开启，左侧可切换历史对话。</span>';
     } else if (!currentSessionId) {
         if (sessions.length) {
             switchSession(sessions[0].id);
@@ -612,11 +703,24 @@ function openRagFullscreen(options = {}) {
 
 function toggleRagSidebar() {
     const sidebar = document.getElementById('rag-sidebar');
-    const btn = document.getElementById('sidebar-toggle-btn');
     if (!sidebar) return;
     const collapsed = sidebar.classList.toggle('collapsed');
-    // 持久化状态
     try { localStorage.setItem('ragSidebarCollapsed', collapsed ? '1' : '0'); } catch(e) {}
+}
+
+function openRagSidebarMobile() {
+    const sidebar = document.getElementById('rag-sidebar');
+    if (!sidebar) return;
+    sidebar.classList.add('mobile-open');
+    // 点击遮罩关闭
+    const mask = document.createElement('div');
+    mask.id = 'rag-sidebar-mask';
+    mask.className = 'rag-sidebar-mask';
+    mask.onclick = () => {
+        sidebar.classList.remove('mobile-open');
+        mask.remove();
+    };
+    document.getElementById('rag-fullscreen')?.appendChild(mask);
 }
 
 function closeRagFullscreen() {
@@ -650,6 +754,17 @@ let ragController = null;
 const ragQueue = [];   // 追问队列
 const _loadingSessions = new Set(); // 正在加载回答的会话 ID
 
+function showRagStatusHint(html) {
+    const hint = document.getElementById('rag-context-hint');
+    if (!hint) return;
+    hint.innerHTML = html || '';
+    hint.style.display = html ? 'flex' : 'none';
+}
+
+function hideRagStatusHint() {
+    showRagStatusHint('');
+}
+
 function _setSessionLoading(sessionId, on) {
     if (!sessionId) return;
     if (on) _loadingSessions.add(sessionId); else _loadingSessions.delete(sessionId);
@@ -670,9 +785,17 @@ function toggleTableSection(forceOpen) {
     const body = document.getElementById('table-body-section');
     const icon = document.getElementById('table-collapse-icon');
     if (!body) return;
-    const isOpen = forceOpen !== undefined ? forceOpen : body.style.display === 'none';
-    body.style.display = isOpen ? 'block' : 'none';
-    if (icon) icon.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
+    // 用 class 标记状态，避免依赖 inline style 字符串比较
+    const isCollapsed = body.classList.contains('section-collapsed') || body.style.display === 'none';
+    const shouldOpen = forceOpen !== undefined ? !!forceOpen : isCollapsed;
+    if (shouldOpen) {
+        body.classList.remove('section-collapsed');
+        body.style.display = 'block';
+    } else {
+        body.classList.add('section-collapsed');
+        body.style.display = 'none';
+    }
+    if (icon) icon.style.transform = shouldOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
 }
 
 function _updateSendBtnMode(inputVal) {
@@ -727,11 +850,11 @@ async function _sendRagQueued(question) {
     if (sendBtn) { sendBtn.disabled = true; sendBtn.style.display = 'none'; }
     if (stopBtn) stopBtn.style.display = 'flex';
     ragController = new AbortController();
-    if (hint) hint.innerHTML = '<span>正在检索数据...</span>';
+    showRagStatusHint('<span>正在检索数据...</span>');
 
     try {
         const sessionId = thisSessionId || 'default';
-        const response = await fetch('/api/agent/stream', {
+        const response = await fetch(API_BASE + '/api/agent/stream', {
             signal: ragController.signal,
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -777,8 +900,10 @@ async function _sendRagQueued(question) {
             html += `<div class="rag-citations"><div class="rag-citation-head">数据来源</div>
                 <div class="rag-citation-list">${data.citations.slice(0,3).map(c => `<span class="rag-citation">${escapeHtml(c)}</span>`).join('')}</div></div>`;
         }
-        if (data.suggestions?.length) {
-            html += `<div class="rag-suggestions">${data.suggestions.map(s => `<button class="rag-suggestion" type="button" data-question="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join('')}</div>`;
+        const safeSuggestions2 = filterRagSuggestions(data.suggestions || []);
+        data.suggestions = safeSuggestions2;
+        if (safeSuggestions2.length) {
+            html += `<div class="rag-suggestions">${safeSuggestions2.map(s => `<button class="rag-suggestion" type="button" data-question="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join('')}</div>`;
         }
         assistantBubble.innerHTML = html;
         assistantBubble.classList.remove('streaming-cursor');
@@ -787,7 +912,7 @@ async function _sendRagQueued(question) {
         const session = sessions.find(s => s.id === thisSessionId);
         if (session) {
             session.messages.push({ role: 'user', content: question });
-            session.messages.push({ role: 'assistant', content: finalAnswer2, html });
+            session.messages.push({ role: 'assistant', content: finalAnswer2, html: sanitizeRagSuggestionHtml(html) });
             saveSessions(); renderSessionList(); syncSessionSelect();
         }
     } catch (err) {
@@ -807,6 +932,7 @@ async function _sendRagQueued(question) {
         ragController = null;
         if (sendBtn) { sendBtn.disabled = false; sendBtn.style.display = 'flex'; }
         if (stopBtn) stopBtn.style.display = 'none';
+        hideRagStatusHint();
         if (ragQueue.length > 0) {
             const next = ragQueue.shift();
             _updateQueueBadge();
@@ -902,6 +1028,22 @@ let sessions = JSON.parse(localStorage.getItem('rag_sessions') || '[]');
 let currentSessionId = null;
 let ragAutoFreshSessionPending = true;
 
+let _sessionsSanitized = false;
+sessions.forEach(session => {
+    (session.messages || []).forEach(message => {
+        if (message.role === 'assistant' && message.html) {
+            const cleaned = sanitizeRagSuggestionHtml(message.html);
+            if (cleaned !== message.html) {
+                message.html = cleaned;
+                _sessionsSanitized = true;
+            }
+        }
+    });
+});
+if (_sessionsSanitized) {
+    try { localStorage.setItem('rag_sessions', JSON.stringify(sessions)); } catch(e) {}
+}
+
 function createSession(title) {
     const id = 'sess_' + Date.now();
     const session = { id, title: title || '新对话', messages: [], createdAt: Date.now() };
@@ -936,30 +1078,6 @@ function clearFollowupContext() {
     document.querySelectorAll('.rag-message.followup-target').forEach(el => el.classList.remove('followup-target'));
 }
 
-// ── 导出当前对话为 Markdown 文件 ────────────────────────────
-function exportCurrentSession() {
-    const session = getCurrentSession();
-    if (!session || !session.messages.length) {
-        alert('当前对话没有内容可导出');
-        return;
-    }
-    const lines = [`# ${session.title || '对话记录'}`, `> 导出时间：${new Date().toLocaleString('zh-CN')}`, ''];
-    session.messages.forEach(m => {
-        if (m.role === 'user') {
-            lines.push(`## 🙋 用户`, '', m.content, '');
-        } else {
-            lines.push(`## 🤖 助手`, '', m.content || '', '');
-        }
-    });
-    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${session.title || '对话'}_${Date.now()}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
-}
-
 function getCurrentSession() {
     return sessions.find(s => s.id === currentSessionId);
 }
@@ -981,7 +1099,7 @@ function switchSession(id) {
     if (!session.messages.length && !isThisSessionLoading) {
         container.innerHTML = `<div class="rag-welcome">
             <div class="rag-welcome-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="32" height="32"><use href="#ico-brain"/></svg></div>
-            <h2>科研教育人才一体化平台智能助手</h2>
+            <h2>教育科技人才一体化平台智能助手</h2>
             <p>查询数据 · 分析趋势 · 了解人才体系 · 查阅报告内容</p>
         </div>`;
     } else {
@@ -993,7 +1111,10 @@ function switchSession(id) {
             const avatarHtml = msg.role === 'user'
                 ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-user"/></svg>'
                 : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-brain"/></svg>';
-            div.innerHTML = '<div class="rag-avatar">' + avatarHtml + '</div><div class="rag-bubble">' + (msg.role === 'user' ? escapeHtml(msg.content) : msg.html || escapeHtml(msg.content)) + '</div>';
+            const messageHtml = msg.role === 'user'
+                ? escapeHtml(msg.content)
+                : sanitizeRagSuggestionHtml(msg.html || escapeHtml(msg.content));
+            div.innerHTML = '<div class="rag-avatar">' + avatarHtml + '</div><div class="rag-bubble">' + messageHtml + '</div>';
             container.appendChild(div);
             // 恢复 assistant 气泡的重新生成/追问按钮
             if (msg.role === 'assistant') {
@@ -1020,6 +1141,7 @@ function switchSession(id) {
     }
 
     renderSessionList();
+    updateDeleteBtn();
 }
 
 function syncSessionSelect() {
@@ -1036,25 +1158,36 @@ function renderSessionList() {
     const list = document.getElementById('rag-session-list');
     if (!list) return;
     syncSessionSelect();
-    
-    if (!sessions.length) {
-        list.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;padding:8px 0;">暂无对话</div>';
+
+    // 只展示有用户消息的会话
+    const visible = sessions.filter(s => s.messages.some(m => m.role === 'user'));
+
+    if (!visible.length) {
+        list.innerHTML = '<div class="session-empty-tip">暂无对话</div>';
+        updateDeleteBtn();
         return;
     }
-    
-    const renameHint = '<div class="session-rename-tip">提示：双击对话名称可重命名</div>';
-    list.innerHTML = renameHint + sessions.map(s => {
+
+    list.innerHTML = visible.map(s => {
         const isActive = s.id === currentSessionId;
         const isLoading = _loadingSessions.has(s.id);
-        const msgCount = s.messages.filter(m => m.role === 'user').length;
-        const shortTitle = s.title.length > 22 ? s.title.slice(0,20) + '…' : s.title;
+        const shortTitle = s.title.length > 22 ? s.title.slice(0, 20) + '…' : s.title;
         return '<div class="session-item' + (isActive ? ' active' : '') + (isLoading ? ' loading' : '') + '" data-session-id="' + s.id + '" title="单击切换，双击重命名">'
             + '<div class="session-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-msg"/></svg></div>'
             + '<div class="session-title">' + escapeHtml(shortTitle) + '</div>'
-            + '<div class="session-meta">' + msgCount + ' 条</div>'
-            + '<button class="session-delete" data-delete-id="' + s.id + '" title="删除">×</button>'
+            + '<button class="session-delete" data-delete-id="' + s.id + '" title="删除此对话">×</button>'
             + '</div>';
     }).join('');
+    updateDeleteBtn();
+}
+
+function updateDeleteBtn() {
+    const btn = document.getElementById('rag-delete-top');
+    if (!btn) return;
+    const sess = getCurrentSession();
+    const hasMsg = sess && sess.messages.some(m => m.role === 'user');
+    btn.disabled = !hasMsg;
+    btn.classList.toggle('active-danger', !!hasMsg);
 }
 
 // Session event delegation
@@ -1079,6 +1212,10 @@ document.addEventListener('click', function(e) {
     if (item) {
         const id = item.dataset.sessionId;
         if (id !== currentSessionId) switchSession(id);
+        // 小屏：选完对话关闭侧边栏
+        const sidebar = document.getElementById('rag-sidebar');
+        sidebar?.classList.remove('mobile-open');
+        document.getElementById('rag-sidebar-mask')?.remove();
     }
 });
 
@@ -1164,6 +1301,7 @@ async function sendRagMessage() {
         saveSessions();
         renderSessionList();
         syncSessionSelect();
+        updateDeleteBtn();
     }
     input.value = '';
     input.style.height = 'auto';
@@ -1199,10 +1337,10 @@ async function sendRagMessage() {
 
     // 更新上下文提示
     const hint = document.getElementById('rag-context-hint');
-    if (hint) hint.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-search"/></svg><span>正在检索数据...</span>';
+    showRagStatusHint('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ico-search"/></svg><span>正在检索数据...</span>');
 
     try {
-        const response = await fetch('/api/agent/stream', {
+        const response = await fetch(API_BASE + '/api/agent/stream', {
             signal: ragController.signal,
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1287,12 +1425,10 @@ async function sendRagMessage() {
             const toolLabels = {
                 trend: '趋势分析',
                 compare: '地区对比',
-                forecast: '预测推断',
                 rank: '排名计算',
                 point: '定点查询',
                 query_trend: '趋势分析',
                 compare_regions: '地区对比',
-                predict_future: '预测推断',
                 rank_provinces: '排名计算',
                 query_point: '定点查询'
             };
@@ -1342,8 +1478,10 @@ async function sendRagMessage() {
                 ${hiddenCitations.length ? `<details class="rag-more-citations"><summary>查看其余 ${hiddenCitations.length} 条来源</summary><div class="rag-citation-list">${hiddenCitations.map(c => `<span class="rag-citation">${escapeHtml(c)}</span>`).join('')}</div></details>` : ''}
             </div>`;
         }
-        if (data.suggestions && data.suggestions.length) {
-            html += `<div class="rag-suggestions">${data.suggestions.map(s => `<button class="rag-suggestion" type="button" data-question="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join('')}</div>`;
+        const safeSuggestions = filterRagSuggestions(data.suggestions || []);
+        data.suggestions = safeSuggestions;
+        if (safeSuggestions.length) {
+            html += `<div class="rag-suggestions">${safeSuggestions.map(s => `<button class="rag-suggestion" type="button" data-question="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join('')}</div>`;
         }
         
         assistantBubble.innerHTML = html;
@@ -1365,7 +1503,7 @@ async function sendRagMessage() {
             if (!lastMsg || lastMsg.role !== 'user' || lastMsg.content !== question) {
                 session.messages.push({ role: 'user', content: question });
             }
-            session.messages.push({ role: 'assistant', content: finalAnswer, html: html });
+            session.messages.push({ role: 'assistant', content: finalAnswer, html: sanitizeRagSuggestionHtml(html) });
             saveSessions();
             // 只有当前显示的就是本次会话时才更新标题和列表；否则只存数据
             if (thisSessionId === currentSessionId) {
@@ -1402,6 +1540,7 @@ async function sendRagMessage() {
         ragController = null;
         if (sendBtn) { sendBtn.disabled = false; sendBtn.style.display = 'flex'; }
         if (stopBtn) stopBtn.style.display = 'none';
+        hideRagStatusHint();
         _updateSendBtnMode(document.getElementById('rag-input')?.value.trim() || '');
 
         // 处理追问队列：取出下一条消息继续发送
@@ -1484,6 +1623,17 @@ function agentSelectAdvancedMetric(metric, year) {
         if (yearSel) yearSel.value = String(year);
     }
     try { renderAdvancedChart?.(); } catch(e) {}
+}
+
+function extractQuestionSubject(question) {
+    if (!question) return '';
+    return String(question).trim()
+        .replace(/^(请问|请|帮我|给我|查询|查看|展示|显示|告诉我|分析一下|对比)/u, '')
+        .replace(/[？?！!。，,、：:；;"'"'「」『』（）()【】\[\]]/g, '')
+        .trim()
+        .slice(0, 20)
+        .replace(/[\\/:*?"<>|]/g, '_')
+        .trim() || 'report';
 }
 
 function agentDownload(filename, mime, content) {
@@ -1633,10 +1783,6 @@ function _getOrCreateModal() {
         </div>
         <div id="chart-modal-footer">
           <span id="chart-modal-meta"></span>
-          <div class="chart-modal-export-row">
-            <button class="mini-btn" id="cme-png">PNG</button>
-            <button class="mini-btn" id="cme-jpg">JPG</button>
-          </div>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -1649,34 +1795,6 @@ function _getOrCreateModal() {
         document.addEventListener('keydown', e => { if (e.key === 'Escape') closeChartModal(); });
     }
 
-    // Export handlers
-    const exportModalChart = (type) => {
-        if (!_chartModalInstance) return;
-        const isDark = document.body.classList.contains('dark-mode');
-        try {
-            if (type === 'svg') {
-                const svgStr = getChartSVGString(_chartModalInstance);
-                if (!svgStr) { showToast('SVG 导出失败', 'error'); return; }
-                const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
-                const blobUrl = URL.createObjectURL(blob);
-                const a = document.createElement('a'); a.href = blobUrl; a.download = 'chart.svg';
-                document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-                return;
-            }
-            const url = _chartModalInstance.getDataURL({
-                type: type === 'jpg' ? 'jpeg' : 'png',
-                pixelRatio: 2,
-                backgroundColor: isDark ? '#ffffff' : '#ffffff'
-            });
-            const a = document.createElement('a'); a.href = url; a.download = 'chart.' + type; a.click();
-        } catch(e) {
-            console.error(e);
-            showToast('图表导出失败', 'error');
-        }
-    };
-    document.getElementById('cme-png').onclick = () => exportModalChart('png');
-    document.getElementById('cme-jpg').onclick = () => exportModalChart('jpg');
 }
 
 function openChartModal(config) {
@@ -1778,7 +1896,8 @@ function _doRenderInlineChart(chartId, config, isModal) {
     }
     // In modal: bigger chart, richer grid padding
     if (isModal) {
-        chartDom.style.height = '500px';
+        const fitHeight = fitAnalysisPanelToViewport();
+        chartDom.style.height = fitHeight + 'px';
     }
     // Dispose previous if any
     if (_inlineChartInstances[chartId]) {
@@ -1791,9 +1910,9 @@ function _doRenderInlineChart(chartId, config, isModal) {
     // Modal height is set explicitly; inline height is controlled by CSS !important (340px).
     if (isModal) chartDom.style.height = '500px';
 
-    // Read the actual rendered width from the wrap container (not chartDiv itself)
+    // Read the actual rendered width from the chart element itself (content area, excludes wrap padding)
     const wrapEl = isModal ? chartDom.parentElement : chartDom.closest('.agent-inline-chart-wrap');
-    const measuredW = wrapEl ? wrapEl.clientWidth : (chartDom.clientWidth || 480);
+    const measuredW = chartDom.clientWidth > 20 ? chartDom.clientWidth : (wrapEl ? wrapEl.clientWidth : 480);
     // For inline charts, read the CSS-applied height rather than hardcoding 280
     const measuredH = isModal ? 500 : (chartDom.offsetHeight || 340);
     
@@ -1824,11 +1943,10 @@ function _doRenderInlineChart(chartId, config, isModal) {
     }
 
     if (config.type === 'correlation' && Array.isArray(config.trendSeries) && Array.isArray(config.scatterData)) {
-        const isDark = document.body.classList.contains('dark-mode');
-        const textColor = isDark ? '#edf2ff' : '#17233d';
-        const mutedColor = isDark ? '#a8b7d4' : '#52637c';
-        const gridColor = isDark ? '#31415f' : '#e1e8f2';
-        const titleColor = isDark ? '#f8fbff' : '#10213f';
+        const textColor = '#17233d';
+        const mutedColor = '#52637c';
+        const gridColor = '#e1e8f2';
+        const titleColor = '#10213f';
         const colors = ['#2563eb', '#f97316'];
         const years = config.years || [];
         const names = (config.trendSeries || []).map(s => s.name);
@@ -1848,8 +1966,8 @@ function _doRenderInlineChart(chartId, config, isModal) {
             tooltip: {
                 trigger: 'axis',
                 confine: true,
-                backgroundColor: isDark ? 'rgba(15,23,42,.96)' : 'rgba(255,255,255,.98)',
-                borderColor: isDark ? '#475569' : '#c9d8ee',
+                backgroundColor: 'rgba(255,255,255,.98)',
+                borderColor: '#c9d8ee',
                 textStyle: { color: textColor, fontSize: 12 }
             },
             legend: {
@@ -1916,7 +2034,7 @@ function _doRenderInlineChart(chartId, config, isModal) {
                     smooth: true,
                     symbolSize: 6,
                     lineStyle: { width: 2.5 },
-                    areaStyle: { opacity: isDark ? 0.08 : 0.1 }
+                    areaStyle: { opacity: 0.1 }
                 },
                 {
                     name: names[1],
@@ -1927,7 +2045,7 @@ function _doRenderInlineChart(chartId, config, isModal) {
                     smooth: true,
                     symbolSize: 6,
                     lineStyle: { width: 2.5 },
-                    areaStyle: { opacity: isDark ? 0.06 : 0.08 }
+                    areaStyle: { opacity: 0.08 }
                 },
                 {
                     name: '年度散点',
@@ -1949,7 +2067,7 @@ function _doRenderInlineChart(chartId, config, isModal) {
                         position: 'top',
                         color: textColor,
                         fontWeight: 800,
-                        textBorderColor: isDark ? 'rgba(2,6,23,.85)' : 'rgba(255,255,255,.95)',
+                        textBorderColor: 'rgba(255,255,255,.95)',
                         textBorderWidth: 2
                     },
                     itemStyle: { color: '#7c3aed', shadowBlur: 8, shadowColor: 'rgba(124,58,237,.28)' }
@@ -1998,8 +2116,7 @@ function _doRenderInlineChart(chartId, config, isModal) {
     }
     
     const series = [];
-    const isDark = document.body.classList.contains('dark-mode');
-    
+
     if (useNational) {
         // National trend
         const natMetric = Object.keys(nationalRows[0] || {}).find(k => {
@@ -2008,7 +2125,7 @@ function _doRenderInlineChart(chartId, config, isModal) {
         }) || metric;
         const data = years.map(y => {
             const row = nationalRows.find(r => r['年份'] === y);
-            return row ? (row[natMetric] || null) : null;
+            return row ? (row[natMetric] ?? null) : null;
         });
         series.push({ name: '全国', type: chartType, data, smooth: true, color: COLORS[0], areaStyle: chartType === 'line' ? { opacity: 0.12 } : undefined });
     } else {
@@ -2020,7 +2137,7 @@ function _doRenderInlineChart(chartId, config, isModal) {
             const regionRows = filteredRows.filter(r => r['地区'] === region);
             const data = years.map(y => {
                 const row = regionRows.find(r => r['年份'] === y);
-                return row ? (row[realMetric] || null) : null;
+                return row ? (row[realMetric] ?? null) : null;
             });
             if (data.some(v => v !== null)) {
                 series.push({ name: region, type: chartType, data, smooth: true, color: COLORS[idx % COLORS.length], areaStyle: chartType === 'line' ? { opacity: 0.1 } : undefined });
@@ -2028,9 +2145,9 @@ function _doRenderInlineChart(chartId, config, isModal) {
         });
     }
     
-    const textColor = isDark ? '#dbeafe' : '#263b59';
-    const gridColor = isDark ? '#2a3a58' : '#e8edf5';
-    const titleColor = isDark ? '#edf2ff' : '#1a202c';
+    const textColor = '#263b59';
+    const gridColor = '#e8edf5';
+    const titleColor = '#1a202c';
 
     if (chartType === 'bar' && regions.length > 3 && years.length === 1 && !useNational) {
         const year = years[0];
@@ -2045,9 +2162,9 @@ function _doRenderInlineChart(chartId, config, isModal) {
             tooltip: {
                 trigger: 'axis',
                 axisPointer: { type: 'shadow' },
-                backgroundColor: isDark ? 'rgba(19,25,41,.96)' : 'rgba(255,255,255,.98)',
+                backgroundColor: 'rgba(255,255,255,.98)',
                 borderColor: '#93c5fd',
-                textStyle: { color: isDark ? '#edf2ff' : '#1a202c', fontSize: 12 },
+                textStyle: { color: '#1a202c', fontSize: 12 },
                 extraCssText: 'box-shadow:0 8px 24px rgba(37,99,235,.16);border-radius:10px;'
             },
             grid: { left: 58, right: 26, top: 58, bottom: 72, containLabel: true },
@@ -2084,8 +2201,8 @@ function _doRenderInlineChart(chartId, config, isModal) {
         backgroundColor: 'transparent',
         title: { text: config.title || `${metric}`, left: 'center', top: 6, textStyle: { color: titleColor, fontSize: 13, fontWeight: 700 } },
         tooltip: {
-            trigger: 'axis', backgroundColor: isDark ? 'rgba(19,25,41,.95)' : 'rgba(255,255,255,.97)',
-            borderColor: '#667eea', textStyle: { color: isDark ? '#edf2ff' : '#1a202c', fontSize: 12 },
+            trigger: 'axis', backgroundColor: 'rgba(255,255,255,.97)',
+            borderColor: '#667eea', textStyle: { color: '#1a202c', fontSize: 12 },
             extraCssText: 'box-shadow:0 4px 20px rgba(102,126,234,.2);border-radius:10px;'
         },
         legend: { data: series.map(s => s.name), top: 30, textStyle: { color: textColor, fontSize: 11 } },
@@ -2209,7 +2326,7 @@ function formatAnswer(text) {
 
 async function loadAllData() {
     try {
-        const response = await fetch('/api/data');
+        const response = await fetch(API_BASE + '/api/data');
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         
@@ -2243,14 +2360,15 @@ async function loadAllData() {
                 for (let key in row) {
                     if (key !== "年份" && key !== "地区") {
                         let val = row[key];
-                        if (val === null) {
-                            row[key] = 0;
+                        if (val === null || val === undefined) {
+                            row[key] = null;          // 保留缺失值语义，不填 0
                         } else if (typeof val === "string") {
                             let num = parseFloat(val);
-                            row[key] = isNaN(num) ? 0 : num;
+                            row[key] = isNaN(num) ? null : num;   // 无法解析的字符串也为 null
                         } else if (typeof val !== "number") {
-                            row[key] = 0;
+                            row[key] = null;
                         }
+                        // typeof val === "number" 时保持原值（含真实的 0）
                     }
                 }
             });
@@ -2281,27 +2399,22 @@ window.updateKPI = function(data) {
     const city      = data['地级市'] || [];
 
     // 总记录数
-    const total = national.length + province.length + city.length;
     const recEl = document.getElementById('kpi-records');
-    if (recEl) recEl.textContent = total.toLocaleString('zh-CN');
+    if (recEl) recEl.textContent = '100,000+';
 
-    // 年份跨度（取省份或全国）
-    const srcForYears = province.length ? province : national;
-    const years = [...new Set(srcForYears.map(r => r['年份'] ?? r['时间']))].filter(Boolean).sort((a,b)=>a-b);
+    // 年份长度
     const yearEl = document.getElementById('kpi-years');
-    if (yearEl && years.length) yearEl.textContent = years[0] + '–' + years[years.length - 1];
+    if (yearEl) yearEl.textContent = '20年以上';
 
-    // 核心指标数（省份表去掉年份/地区后的列数）
-    const sampleProv = province[0] || {};
-    const metricCount = Object.keys(sampleProv).filter(k => k !== '年份' && k !== '地区').length;
+    // 核心指标数
     const metEl = document.getElementById('kpi-metrics');
-    if (metEl) metEl.textContent = metricCount;
+    if (metEl) metEl.textContent = '100+';
 
     // 覆盖省份/城市数
     const provinces = new Set(province.map(r => r['地区']).filter(Boolean));
     const cities    = new Set(city.map(r => r['地区']).filter(Boolean));
     const regEl = document.getElementById('kpi-regions');
-    if (regEl) regEl.textContent = provinces.size + ' 省 / ' + cities.size + ' 市';
+    if (regEl) regEl.textContent = (provinces.size + cities.size) + '+';
 };
 
 // ======================= 快捷提问动态初始化 =======================
@@ -2310,12 +2423,10 @@ function initQuickButtons(data) {
     const province = data['省份'] || data['province'] || [];
     const years = [...new Set(province.map(r => r['年份']).filter(Boolean))].sort((a, b) => b - a);
     const ly = years[0] || new Date().getFullYear() - 1; // latestYear
-    const ny = ly + 2; // 预测年份
-
-    // 侧边栏快捷提问：4个不同维度（趋势/预测/报告/城市）
+    // 侧边栏快捷提问：4个不同维度（趋势/排名/报告/城市）
     const sq = {
         'sq-trend':    { q: `近10年工业机器人密度趋势`,           label: '机器人密度近10年趋势' },
-        'sq-forecast': { q: `预测${ny}年全国普通高校数量`,         label: `预测${ny}年高校数量` },
+        'sq-edu-rank': { q: `${ly}年各省普通高校数量排名`,          label: `${ly}年高校数量排名` },
         'sq-report':   { q: `根据全球智数化人才指数报告，中国的智数化人才排名情况`, label: '报告：中国人才排名' },
         'sq-city':     { q: `济南市近5年科学支出水平趋势`,          label: '济南市科学支出趋势' }
     };
@@ -2330,7 +2441,7 @@ function initQuickButtons(data) {
     const hints = {
         'hint-ranking':  { q: `${ly}年各省杰青数量前10排名`,        label: `${ly}年各省杰青排名` },
         'hint-trend':    { q: `近5年全国长江学者数量趋势`,            label: '近5年长江学者趋势' },
-        'hint-forecast': { q: `杰青和优青有什么区别？`,               label: '杰青与优青的区别' },
+        'hint-knowledge': { q: `杰青和优青有什么区别？`,               label: '杰青与优青的区别' },
         'hint-compare':  { q: `四大青年人才包括哪些称号？`,            label: '四大青人才称号' }
     };
     for (const [id, cfg] of Object.entries(hints)) {
@@ -2349,12 +2460,18 @@ let mainChart, pieChart, advancedChart;
 let currentSheet = "全国";
 let originalRows = [], headers = [];
 let tableSheet = "全国";
+let advSheet = "省份";
+let advRows = [];
+let analysisSheet = "省份";
 let tableRows = [], tableHeaders = [];
 let dimType = "nation";
 let valueFields = [];
 let currentMetricIndex = 0;
 let carouselTimer = null;
 let isCarouselPaused = false;
+let mainCarouselManualPaused = false; // 用户点按钮手动暂停，hover 不覆盖
+let isMouseOverMainChart = false;     // 鼠标是否悬浮在主图表卡片上
+let isMouseOverAnalysis = false;      // 鼠标是否悬浮在分析卡片上
 let inactivityTimer = null;
 let groupField = "地区";
 let selectedGroups = [];
@@ -2368,6 +2485,15 @@ const COLORS = [
     '#fb8c00', '#0097a7', '#c62828', '#00acc1', '#827717',
     '#ad1457', '#039be5', '#2e7d32', '#6a1b9a', '#4e342e',
     '#558b2f'
+];
+const SCATTER_COLORS = [
+    '#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6',
+    '#06B6D4', '#F97316', '#EC4899', '#14B8A6', '#84CC16',
+    '#6366F1', '#FB923C', '#A855F7', '#4ADE80', '#FBBF24',
+    '#38BDF8', '#F43F5E', '#2DD4BF', '#C084FC', '#FCD34D',
+    '#67E8F9', '#86EFAC', '#FCA5A5', '#C4B5FD', '#FF6B6B',
+    '#4ECDC4', '#FFE66D', '#A8E6CF', '#FF8B94', '#7ED3F4',
+    '#818CF8'
 ];
 let pageSize = 20;
 let currentPage = 1;
@@ -2384,6 +2510,7 @@ let pieCurrentYear = null;
 let pieCurrentMetricIndex = 0;
 let pieCarouselTimer = null;
 let piePaused = false;
+let pieManualPaused = false; // 用户点按钮手动暂停，hover 不覆盖
 let pieCarouselQueue = [];
 
 let advMode = "rank";
@@ -2391,10 +2518,11 @@ let advMetrics = [];
 let advCurrentMetricIndex = 0;
 let advCarouselTimer = null;
 let advPaused = false;
+let advManualPaused = false; // 用户点按钮手动暂停，hover 不覆盖
 let advYears = [];
 let advCurrentYear = null;
 let rankFullData = [];
-let rankSelectedIndices = new Set();
+let rankSelectedNames = new Set(); // 存地区名称，不存索引，避免重排序后错位
 let rankChart = null;
 let scatterTableMode = 'province';
 
@@ -2404,34 +2532,62 @@ let rankRegionSearchTerm = "";
 
 // ======================= 初始化 =======================
 
+
+const _CBISlots = [
+    'cbi-1','cbi-2','cbi-3','cbi-4','cbi-10',
+    'cbi-l2a','cbi-l2b','cbi-l2c','cbi-l2d',
+    'cbi-l3a','cbi-l3b','cbi-l3c','cbi-l3d',
+    'cbi-r3a','cbi-r3b','cbi-r3c','cbi-r3d',
+    'cbi-r2a','cbi-r2b','cbi-r2c','cbi-r2d',
+    'cbi-5','cbi-6','cbi-7','cbi-8','cbi-9'
+];
+function _applyCoverBgNames(names) {
+    const n = _CBISlots.length;
+    _CBISlots.forEach((cls, i) => {
+        const el = document.querySelector('.' + cls);
+        if (!el) return;
+        const idx = names.length <= n
+            ? i % names.length
+            : Math.round(i * (names.length - 1) / (n - 1));
+        el.textContent = names[idx];
+    });
+}
+function restoreCoverBgFromCache() {
+    try {
+        const cached = localStorage.getItem('cbi_names');
+        if (cached) _applyCoverBgNames(JSON.parse(cached));
+    } catch(e) {}
+}
+function initCoverBgIndicators() {
+    const metrics = getAllMetrics('province');
+    if (!metrics.length) return;
+    const names = metrics.map(m => cleanMetricName(m) + '指数');
+    _applyCoverBgNames(names);
+    try { localStorage.setItem('cbi_names', JSON.stringify(names)); } catch(e) {}
+}
+
 async function init() {
     if (window._platformInitStarted) return;
     window._platformInitStarted = true;
     await loadAllData();
-    
+    try { initCoverBgIndicators(); } catch(e) {}
+
+
     mainChart = initEChartSafe(document.getElementById("main-chart"));
     if (mainChart) {
-        mainChart.getDom().addEventListener('mouseenter', () => { isCarouselPaused = true; });
-        mainChart.getDom().addEventListener('mouseleave', () => { isCarouselPaused = false; });
+        // 暂停由 section-chart 卡片级别统一控制，见 bindEvents
     } else {
         showChartUnavailable(document.getElementById("main-chart"));
     }
     
     pieChart = initEChartSafe(document.getElementById("pie-chart"));
     if (pieChart) {
-        pieChart.getDom().addEventListener('mouseenter', () => { piePaused = true; });
-        pieChart.getDom().addEventListener('mouseleave', () => { piePaused = false; });
+        // 暂停由 avCard mouseenter/mouseleave 统一控制，不在 canvas 级别重复绑定
     } else {
         showChartUnavailable(document.getElementById("pie-chart"));
     }
     
-    advancedChart = initEChartSafe(document.getElementById("advanced-content"));
-    if (advancedChart) {
-        advancedChart.getDom().addEventListener('mouseenter', () => { advPaused = true; });
-        advancedChart.getDom().addEventListener('mouseleave', () => { advPaused = false; });
-    } else {
-        showChartUnavailable(document.getElementById("advanced-content"));
-    }
+    // advancedChart pre-init removed; rankChart is initialized lazily in renderRankCompareChart
     
     if (!window._platformResizeBound) {
     window._platformResizeBound = true;
@@ -2464,6 +2620,7 @@ async function init() {
     bindEvents();
     initColumnSelector();
     switchSheet(currentSheet);
+    switchAnalysisView(analysisSheet);
     initPageEnhancements();
     initHeroPreview();
     
@@ -2474,114 +2631,6 @@ async function init() {
     showLanding();
 }
 
-// ======================= 夜间模式 =======================
-
-function initDarkMode() {
-    const darkModeToggle = document.getElementById('darkModeToggle');
-    const landingToggle = document.getElementById('darkModeToggleLanding');
-    const coverToggle = document.getElementById('darkModeToggleCover');
-    const isDarkMode = localStorage.getItem('darkMode') === 'true';
-    
-    // favicon 始终白底合成
-    const setFaviconWithBg = (_dark) => {
-        const src = 'images/sdufe-logo.png?v=20260603';
-        const img = new Image();
-        img.onload = () => {
-            const c = document.createElement('canvas');
-            c.width = img.width; c.height = img.height;
-            const ctx = c.getContext('2d');
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, c.width, c.height);
-            ctx.drawImage(img, 0, 0);
-            const link = document.querySelector("link[rel~='icon']") || document.createElement('link');
-            link.rel = 'icon'; link.type = 'image/png';
-            link.href = c.toDataURL('image/png');
-            document.head.appendChild(link);
-        };
-        img.src = src;
-    };
-
-    const applyDark = (dark) => {
-        document.body.classList.toggle('dark-mode', dark);
-        if (typeof window.updateDarkIcons === 'function') window.updateDarkIcons(dark);
-        updateChartsTheme(dark);
-        setFaviconWithBg(dark);
-    };
-    
-    setFaviconWithBg(isDarkMode); // 页面加载时立即合成白底 favicon
-    if (isDarkMode) applyDark(true);
-
-    if (landingToggle && !landingToggle._dmBound) {
-        landingToggle._dmBound = true;
-        landingToggle.addEventListener('click', () => {
-            const isNowDark = !document.body.classList.contains('dark-mode');
-            localStorage.setItem('darkMode', isNowDark);
-            applyDark(isNowDark);
-        });
-    }
-    if (coverToggle && !coverToggle._dmBound) {
-        coverToggle._dmBound = true;
-        coverToggle.addEventListener('click', () => {
-            const isNowDark = !document.body.classList.contains('dark-mode');
-            localStorage.setItem('darkMode', isNowDark);
-            applyDark(isNowDark);
-        });
-    }
-    
-    // Dashboard header toggle
-    if (darkModeToggle && !darkModeToggle._dmBound) {
-        darkModeToggle._dmBound = true;
-        darkModeToggle.addEventListener('click', () => {
-            const isNowDark = !document.body.classList.contains('dark-mode');
-            localStorage.setItem('darkMode', isNowDark);
-            applyDark(isNowDark);
-        });
-    }
-    // RAG page toggle
-    const t2 = document.getElementById('darkModeToggle2');
-    if (t2 && !t2._dmBound) {
-        t2._dmBound = true;
-        t2.addEventListener('click', () => {
-            const isNowDark = !document.body.classList.contains('dark-mode');
-            localStorage.setItem('darkMode', isNowDark);
-            applyDark(isNowDark);
-        });
-    }
-}
-
-function updateChartsTheme(isDark) {
-    const textColor = isDark ? '#dbeafe' : '#263b59';
-    const axisColor = isDark ? '#2a3a58' : '#dde3ef';
-    const splitColor = isDark ? '#2a3a58' : '#eef1f7';
-    const tooltipBg = isDark ? 'rgba(19,25,41,.96)' : 'rgba(255,255,255,.97)';
-    
-    const optionUpdate = {
-        backgroundColor: 'transparent',
-        textStyle: { color: textColor },
-        title: { textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }, subtextStyle: { color: isDark ? '#8fa6c8' : '#718096' } },
-        xAxis: { axisLabel: { color: textColor }, axisLine: { lineStyle: { color: axisColor } }, axisTick: { lineStyle: { color: axisColor } }, splitLine: { lineStyle: { color: splitColor } } },
-        yAxis: { axisLabel: { color: textColor }, axisLine: { lineStyle: { color: axisColor } }, axisTick: { lineStyle: { color: axisColor } }, splitLine: { lineStyle: { color: splitColor } } },
-        legend: { textStyle: { color: textColor } },
-        tooltip: { backgroundColor: tooltipBg, borderColor: '#667eea', textStyle: { color: isDark ? '#edf2ff' : '#1a202c' } }
-    };
-    
-    [mainChart, pieChart, advancedChart, rankChart].forEach(chart => {
-        if (chart && !chart.isDisposed()) try { chart.setOption(optionUpdate, false); } catch(e) {}
-    });
-    // Update inline chat charts
-    Object.values(_inlineChartInstances || {}).forEach(chart => {
-        try { if (chart && !chart.isDisposed()) chart.setOption(optionUpdate, false); } catch(e) {}
-    });
-    setTimeout(() => {
-        try {
-            const scatterPanelOpen = document.getElementById('analysis-panel')?.classList.contains('open');
-            const scatterDom = document.getElementById('analysis-chart');
-            if (scatterPanelOpen && scatterDom && window._lastScatterOption && typeof loadChart === 'function') {
-                loadChart('scatter');
-            }
-        } catch (e) {}
-    }, 0);
-}
 
 // ======================= RAG 事件绑定 =======================
 
@@ -2590,10 +2639,9 @@ function bindRagEvents() {
     bindRagEvents._bound = true;
     const ragInput = document.getElementById('rag-input');
     const ragSend = document.getElementById('rag-send');
-    const sessionSelect = document.getElementById('rag-session-select');
-    const newTop = document.getElementById('rag-new-top');
     const delTop = document.getElementById('rag-delete-top');
-    
+    const sessionSelect = document.getElementById('rag-session-select');
+
     if (ragInput) {
         ragInput.addEventListener('input', function() {
             this.style.height = 'auto';
@@ -2603,27 +2651,27 @@ function bindRagEvents() {
         ragInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                sendRagMessage(); // 排队逻辑在 sendRagMessage 里处理
+                sendRagMessage();
             }
         });
     }
-    
-    // Bind rag-send via addEventListener (remove onclick attr reliance)
+
     if (ragSend) {
-        // Remove any stale onclick to avoid double-fire
         ragSend.onclick = null;
         ragSend.addEventListener('click', () => {
             if (!isRagStreaming) sendRagMessage();
         });
     }
 
+    if (delTop) delTop.addEventListener('click', () => {
+        if (!delTop.disabled) deleteCurrentSession();
+    });
+
     if (sessionSelect) {
-        sessionSelect.addEventListener('change', e => {
-            if (e.target.value) switchSession(e.target.value);
+        sessionSelect.addEventListener('change', () => {
+            if (sessionSelect.value) switchSession(sessionSelect.value);
         });
     }
-    if (newTop) newTop.addEventListener('click', startNewSession);
-    if (delTop) delTop.addEventListener('click', deleteCurrentSession);
     
     // ---- Landing page Enter key sends query ----
     const landingQuery = document.getElementById('landing-query');
@@ -2731,19 +2779,43 @@ function orderTableHeadersForSheet(headers, sheetName) {
 // ======================= 工作表切换 =======================
 
 function buildSheetSelect() {
-    const mainSelect = document.getElementById("sheet-list");
+    const mainSelect  = document.getElementById("sheet-list");
+    const avSelect    = document.getElementById("sheet-list-av");
     const tableSelect = document.getElementById("sheet-list-table");
-    [mainSelect, tableSelect].filter(Boolean).forEach(sel => {
+
+    // main and table selects: use raw sheet names
+    [mainSelect, tableSelect].forEach((sel, idx) => {
+        if (!sel) return;
+        const activeSheet = idx === 0 ? currentSheet : tableSheet;
         sel.innerHTML = "";
         window.sheetList?.forEach(s => {
             const opt = document.createElement("option");
             opt.value = s;
             opt.textContent = s;
-            if (s === (sel === tableSelect ? tableSheet : currentSheet)) opt.selected = true;
+            if (s === activeSheet) opt.selected = true;
             sel.appendChild(opt);
         });
     });
-    if (mainSelect) mainSelect.onchange = (e) => requestSwitchSheet(e.target.value);
+
+    // av select: descriptive view labels
+    if (avSelect) {
+        const avViewLabels = {
+            "全国": "省份占比饼图",
+            "省份": "省份排名对比",
+            "地级市": "地级市排名对比",
+        };
+        avSelect.innerHTML = "";
+        window.sheetList?.forEach(s => {
+            const opt = document.createElement("option");
+            opt.value = s;
+            opt.textContent = avViewLabels[s] || s;
+            if (s === analysisSheet) opt.selected = true;
+            avSelect.appendChild(opt);
+        });
+        avSelect.onchange = (e) => switchAnalysisView(e.target.value);
+    }
+
+    if (mainSelect)  mainSelect.onchange  = (e) => requestSwitchSheet(e.target.value);
     if (tableSelect) tableSelect.onchange = (e) => setTableSheet(e.target.value, { independent: true });
 }
 
@@ -2773,10 +2845,12 @@ function initPageEnhancements() {
 }
 
 function syncSheetSelects(sheetName = currentSheet) {
-    const main = document.getElementById("sheet-list");
+    const main  = document.getElementById("sheet-list");
     const table = document.getElementById("sheet-list-table");
-    if (main) main.value = sheetName;
+    const av    = document.getElementById("sheet-list-av");
+    if (main)  main.value  = sheetName;
     if (table) table.value = tableSheet || sheetName;
+    if (av)    av.value    = analysisSheet;
 }
 
 function requestSwitchSheet(sheetName) {
@@ -2835,6 +2909,36 @@ function setTableSheet(sheetName, options = {}) {
     if (options.independent) showToast(`明细表已切换到：${tableSheet}`, 'success', 1600);
 }
 
+function switchAnalysisView(sheetName) {
+    analysisSheet = sheetName;
+    const sel = document.getElementById("sheet-list-av");
+    if (sel) sel.value = sheetName;
+    if (sheetName === "全国") {
+        stopPieCarousel?.();
+        initPieChart();
+    } else {
+        stopPieCarousel(); // 切换到排名图时停止饼图轮播
+        advSheet = sheetName;
+        switchAdvSheet(sheetName);
+    }
+}
+
+function switchAdvSheet(sheetName) {
+    advSheet = sheetName;
+    const rows = window.workbook?.[sheetName]?.map(r => ({...r})) || [];
+    advRows = rows;
+    const sample = advRows[0] || {};
+    const fields = Object.keys(sample).filter(k =>
+        k !== '年份' && k !== '地区' && k !== '时间地区' && typeof sample[k] === 'number'
+    );
+    advMetrics = [...fields];
+    advCurrentMetricIndex = 0;
+    advYears = [...new Set(advRows.map(r => r["年份"]))].filter(Boolean).sort();
+    advCurrentYear = advYears.length ? advYears[advYears.length - 1] : null;
+    rankSelectedNames.clear();
+    renderRankUI();
+}
+
 function switchSheet(sheetName) {
     currentSheet = sheetName;
     syncSheetSelects();
@@ -2849,12 +2953,20 @@ function switchSheet(sheetName) {
 
     const searchContainer = document.getElementById("region-search-container");
     const metricContainer = document.getElementById('metric-selector-container');
-    const quickJumpContainer = document.getElementById('quick-jump-container');
-    const setPanelVisible = (el, visible, display = 'block') => {
+    const groupActions = document.getElementById('group-actions');
+    const setPanelVisible = (el, visible) => {
         if (!el) return;
         el.hidden = !visible;
-        el.style.display = visible ? display : 'none';
+        el.style.display = visible ? '' : 'none';
     };
+
+    const chartMetricBar = document.getElementById('chart-metric-bar');
+    // 把指标选择器归位到左侧面板（切全国时隐藏，切其他表时再移出去）
+    const panelSection = document.getElementById('dynamic-panel');
+    const regionSearchContainer = document.getElementById('region-search-container');
+    if (metricContainer && panelSection && metricContainer.parentElement !== panelSection) {
+        panelSection.insertBefore(metricContainer, regionSearchContainer || null);
+    }
 
     if (sheetName === "全国") {
         dimType = "nation";
@@ -2865,18 +2977,11 @@ function switchSheet(sheetName) {
         regionSearchKeyword = "";
         const regionSearch = document.getElementById("region-search");
         if (regionSearch) regionSearch.value = "";
-        const quickJump = document.getElementById("quick-jump-region");
-        if (quickJump) quickJump.value = "";
         buildNationPanel();
-        document.querySelector(".pie-card") && (document.querySelector(".pie-card").style.display = "block");
-        document.querySelector(".advanced-card") && (document.querySelector(".advanced-card").style.display = "none");
-        initPieChart();
-        setPanelVisible(searchContainer, false, 'flex');
+        setPanelVisible(searchContainer, false);
         setPanelVisible(metricContainer, false);
-        setPanelVisible(quickJumpContainer, false);
-        // National data is single-metric per chart; hide bulk-select buttons that don't apply
-        const groupActions = document.getElementById('group-actions');
-        if (groupActions) groupActions.style.display = 'none';
+        setPanelVisible(groupActions, false);
+        if (chartMetricBar) chartMetricBar.style.display = 'none';
     } else if (sheetName === "地级市") {
         dimType = "city";
         scatterTableMode = 'city';
@@ -2886,15 +2991,14 @@ function switchSheet(sheetName) {
         const groups = [...new Set(originalRows.map(r => r[groupField]))].filter(v => v).sort();
         selectedGroups = groups.slice(0, 3);
         buildGroupPanel(groups, "地级市");
-        document.querySelector(".pie-card") && (document.querySelector(".pie-card").style.display = "none");
-        document.querySelector(".advanced-card") && (document.querySelector(".advanced-card").style.display = "block");
         buildMetricSelector();
-        initAdvancedAnalysis();
-        setPanelVisible(searchContainer, true, 'flex');
-        setPanelVisible(metricContainer, true);
-        setPanelVisible(quickJumpContainer, true);
-        const groupActions = document.getElementById('group-actions');
-        if (groupActions) groupActions.style.display = '';
+        setPanelVisible(searchContainer, true);
+        setPanelVisible(metricContainer, false);
+        if (chartMetricBar) {
+            chartMetricBar.style.display = 'flex';
+            chartMetricBar.appendChild(metricContainer);
+        }
+        setPanelVisible(groupActions, true);
     } else if (sheetName === "省份") {
         dimType = "province";
         scatterTableMode = 'province';
@@ -2904,15 +3008,14 @@ function switchSheet(sheetName) {
         const groups = [...new Set(originalRows.map(r => r[groupField]))].filter(v => v).sort();
         selectedGroups = groups.slice(0, 3);
         buildGroupPanel(groups, "省份");
-        document.querySelector(".pie-card") && (document.querySelector(".pie-card").style.display = "none");
-        document.querySelector(".advanced-card") && (document.querySelector(".advanced-card").style.display = "block");
         buildMetricSelector();
-        initAdvancedAnalysis();
-        setPanelVisible(searchContainer, true, 'flex');
-        setPanelVisible(metricContainer, true);
-        setPanelVisible(quickJumpContainer, true);
-        const groupActions = document.getElementById('group-actions');
-        if (groupActions) groupActions.style.display = '';
+        setPanelVisible(searchContainer, true);
+        setPanelVisible(metricContainer, false);
+        if (chartMetricBar) {
+            chartMetricBar.style.display = 'flex';
+            chartMetricBar.appendChild(metricContainer);
+        }
+        setPanelVisible(groupActions, true);
     }
 
     sortKey = "";
@@ -2928,9 +3031,18 @@ function switchSheet(sheetName) {
     applyFilterAndSort();
     ensureDashboardAnalysisVisible();
     renderTablePage();
-    // 切换工作表时重置图表类型为自动，让每个工作表用最合适的默认图类型
+    // 切换工作表时按智能推荐逻辑设置默认图类型（全国→面积，省份/城市→柱状）
     const chartTypeEl = document.getElementById("chart-type");
-    if (chartTypeEl) chartTypeEl.value = "auto";
+    if (chartTypeEl) {
+        const mixedOpt = chartTypeEl.querySelector('option[value="mixed"]');
+        if (mixedOpt) mixedOpt.style.display = dimType === "nation" ? "" : "none";
+        chartTypeEl.value = dimType === "nation" ? "mixed" : "bar";
+    }
+    // 切换工作表时重置手动暂停状态，并更新按钮文字
+    mainCarouselManualPaused = false;
+    isCarouselPaused = false;
+    const pauseBtn = document.getElementById("main-pause-carousel");
+    if (pauseBtn) pauseBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播';
     stopCarousel();
     startCarousel();
     renderMainChart();
@@ -2961,7 +3073,7 @@ function buildMetricSelector() {
 
 function buildNationPanel() {
     const panelTitle = document.getElementById("panel-title");
-    if (panelTitle) panelTitle.innerHTML = `核心指标（${valueFields.length}个）`;
+    if (panelTitle) panelTitle.innerHTML = `核心指标`;
     
     const container = document.getElementById("indicator-list");
     if (!container) return;
@@ -2988,44 +3100,13 @@ function updateNationHighlight() {
     });
 }
 
-function buildQuickJump() {
-    const quickJump = document.getElementById('quick-jump-region');
-    if (!quickJump) return;
-    
-    if (!allRegionList || allRegionList.length === 0) {
-        quickJump.innerHTML = '<option value="">-- 无地区数据 --</option>';
-        return;
-    }
-    
-    quickJump.innerHTML = '<option value="">-- 选择地区 --</option>' + 
-        allRegionList.map(r => `<option value="${r}">${r}</option>`).join('');
-    
-    quickJump.onchange = (e) => {
-        const region = e.target.value;
-        if (region) {
-            const items = document.querySelectorAll('#indicator-list .indicator-item');
-            for (let item of items) {
-                const labelSpan = item.querySelector('span');
-                if (labelSpan && labelSpan.innerText === region) {
-                    const cb = item.querySelector('input');
-                    if (cb && !cb.checked) {
-                        cb.checked = true;
-                        cb.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                    item.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    break;
-                }
-            }
-            quickJump.value = '';
-        }
-    };
-}
+// buildQuickJump 已移除（快速跳转下拉框已删除）
 
 function buildGroupPanel(groups, type) {
     allRegionList = groups;
-    const titleMap = { "省份": "🏙️ 省份", "地级市": "🏙️ 地区" };
+    const titleMap = { "省份": "省份", "地级市": "地区" };
     const panelTitle = document.getElementById("panel-title");
-    if (panelTitle) panelTitle.innerHTML = `${titleMap[type]}（${groups.length}个）`;
+    if (panelTitle) panelTitle.innerHTML = `${titleMap[type]}`;
     
     const container = document.getElementById("indicator-list");
     if (!container) return;
@@ -3059,9 +3140,10 @@ function buildGroupPanel(groups, type) {
                 if (e.target.checked) {
                     if (!selectedGroups.includes(g)) selectedGroups.push(g);
                 } else {
-                    const idx = selectedGroups.indexOf(g);
-                    if (idx !== -1) selectedGroups.splice(idx, 1);
+                    selectedGroups = selectedGroups.filter(s => s !== g);
                 }
+                // 始终按 allRegionList 原始顺序排列，保证颜色与列表位置一致
+                selectedGroups = allRegionList.filter(r => selectedGroups.includes(r));
                 renderMainChart();
             };
             
@@ -3108,20 +3190,18 @@ function buildGroupPanel(groups, type) {
             regionSearchKeyword = e.target.value;
             renderRegionList();
         };
-    }
-
-    const clearSearchBtn = document.getElementById("clear-search-btn");
-    if (clearSearchBtn) {
-        clearSearchBtn.onclick = () => {
-            if (searchInput) searchInput.value = "";
-            regionSearchKeyword = "";
-            renderRegionList();
+        searchInput.onkeydown = (e) => {
+            if ((e.key === 'Enter' || e.key === 'Escape') && searchInput.value.trim()) {
+                e.preventDefault();
+                searchInput.value = "";
+                regionSearchKeyword = "";
+                renderRegionList();
+            }
         };
     }
 
     renderRegionList();
     renderMainChart();
-    buildQuickJump();
 }
 
 // ======================= 主图表渲染 =======================
@@ -3129,37 +3209,86 @@ function buildGroupPanel(groups, type) {
 function renderMainChart() {
     if (!mainChart || !valueFields.length) return;
     
-    let chartType = document.getElementById("chart-type")?.value || "auto";
-    if (chartType === "auto") chartType = (dimType === "nation" ? "area" : "bar");
+    let chartType = document.getElementById("chart-type")?.value || "mixed";
+    if (chartType === "auto") chartType = (dimType === "nation" ? "mixed" : "bar");
+    // 非全国工作表不支持混合图，退回柱状
+    if (chartType === "mixed" && dimType !== "nation") chartType = "bar";
     const isArea = chartType === "area";
     const echartsType = isArea ? "line" : "bar";
-    
+
     const metric = valueFields[currentMetricIndex];
     if (!metric) return;
-    
-    const isDark = document.body.classList.contains('dark-mode');
-    
+
     if (dimType === "nation") {
         const years = [...new Set(originalRows.map(r => r["年份"]))].sort((a,b)=>a-b);
         const data = years.map(y => originalRows.find(r => r["年份"] === y)?.[metric] ?? 0);
-        
+
+        const isMixed = chartType === "mixed";
+        const nationSeries = isMixed ? [
+            {
+                name: metric,
+                type: 'bar',
+                data,
+                barMaxWidth: 40,
+                itemStyle: {
+                    borderRadius: [5, 5, 0, 0],
+                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                        { offset: 0, color: 'rgba(139,92,246,0.75)' },
+                        { offset: 1, color: 'rgba(96,165,250,0.35)' }
+                    ])
+                },
+                label: { show: false }
+            },
+            {
+                name: ' ',
+                type: 'line',
+                data,
+                smooth: true,
+                lineStyle: { width: 3, color: '#6d28d9' },
+                symbol: 'circle',
+                symbolSize: 7,
+                itemStyle: { color: '#6d28d9' },
+                areaStyle: {
+                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                        { offset: 0, color: 'rgba(109,40,217,0.22)' },
+                        { offset: 1, color: 'rgba(109,40,217,0.01)' }
+                    ])
+                }
+            }
+        ] : [{
+            name: metric,
+            type: echartsType,
+            data,
+            smooth: true,
+            color: COLORS[0],
+            areaStyle: isArea ? {
+                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                    { offset: 0, color: 'rgba(102,126,234,0.45)' },
+                    { offset: 1, color: 'rgba(102,126,234,0.03)' }
+                ])
+            } : undefined
+        }];
+
         mainChart.setOption({
             backgroundColor: 'transparent',
-            title: { 
-                text: custom.title !== "auto" ? custom.title : `${metric} 时序趋势`, 
+            title: {
+                text: custom.title !== "auto" ? custom.title : `${metric} 时序趋势`,
                 left: "center",
-                textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
+                textStyle: { color: '#1f2b48' }
             },
-            tooltip: { 
+            tooltip: {
                 trigger: "axis",
-                backgroundColor: isDark ? 'rgba(26,31,46,0.95)' : 'rgba(255,255,255,0.95)',
+                backgroundColor: 'rgba(255,255,255,0.95)',
                 borderColor: '#667eea',
-                textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
+                textStyle: { color: '#1f2b48' },
+                formatter: isMixed
+                    ? params => `${params[0].axisValue}年<br/>${metric}：<b>${params[0].value}</b>`
+                    : undefined
             },
             legend: {
-                data: [metric],
+                data: isMixed ? [metric] : [metric],
                 top: 30,
-                textStyle: { color: isDark ? '#dbeafe' : '#263b59' }
+                textStyle: { color: '#263b59' }
             },
             grid: {
                 top: 70,
@@ -3172,36 +3301,22 @@ function renderMainChart() {
                 type: "category",
                 data: years,
                 name: custom.xName !== "auto" ? custom.xName : "年份",
-                axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
-                axisLabel: { color: isDark ? '#dbeafe' : '#263b59', hideOverlap: true }
+                axisLine: { lineStyle: { color: '#9fb1c8' } },
+                axisLabel: { color: '#263b59', hideOverlap: true }
             },
             yAxis: {
-                name: (() => {
-                    const n = custom.yName !== "auto" ? custom.yName : metric;
-                    return n.length > 10 ? n.slice(0, 10) + '…' : n;
-                })(),
+                name: custom.yName !== "auto" ? custom.yName : metric,
                 nameLocation: 'middle',
-                nameGap: 50,
+                nameGap: 60,
+                nameTextStyle: { overflow: 'break', width: 80 },
                 min: 0,
                 max: custom.yMax !== "auto" ? Number(custom.yMax) : null,
-                axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
-                axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
-                splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
+                axisLine: { lineStyle: { color: '#9fb1c8' } },
+                axisLabel: { color: '#263b59', formatter: fmtAxisNum },
+                splitLine: { lineStyle: { color: '#d8e1ec', type: 'dashed' } }
             },
-            series: [{
-                name: metric,
-                type: echartsType,
-                data,
-                smooth: true,
-                color: COLORS[0],
-                areaStyle: isArea ? {
-                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                        { offset: 0, color: 'rgba(102,126,234,0.45)' },
-                        { offset: 1, color: 'rgba(102,126,234,0.03)' }
-                    ])
-                } : undefined
-            }]
-        }, false);
+            series: nationSeries
+        }, true);
         return;
     }
 
@@ -3211,7 +3326,7 @@ function renderMainChart() {
     selectedGroups.forEach((grp, idx) => {
         const data = years.map(y => {
             let row = originalRows.find(r => r["年份"] === y && r["地区"] === grp);
-            return row ? row[metric] : 0;
+            return row ? (row[metric] ?? null) : null;   // null 让 ECharts 在折线图中断开
         });
         series.push({
             name: grp,
@@ -3231,25 +3346,25 @@ function renderMainChart() {
     
     mainChart.setOption({
         backgroundColor: 'transparent',
-        title: { 
-            text: custom.title !== "auto" ? custom.title : `${metric} 区域对比`, 
+        title: {
+            text: custom.title !== "auto" ? custom.title : `${metric} 区域对比`,
             left: "center",
-            textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
+            textStyle: { color: '#1f2b48' }
         },
-        tooltip: { 
+        tooltip: {
             trigger: "axis",
-            backgroundColor: isDark ? 'rgba(26,31,46,0.95)' : 'rgba(255,255,255,0.95)',
+            backgroundColor: 'rgba(255,255,255,0.95)',
             borderColor: '#667eea',
-            textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
+            textStyle: { color: '#1f2b48' }
         },
         legend: {
             data: selectedGroups,
             top: 30,
             type: "scroll",
             pageIconSize: 10,
-            pageTextStyle: { fontSize: 11, color: isDark ? '#8fa6c8' : '#718096' },
-            textStyle: { color: isDark ? '#dbeafe' : '#263b59', fontSize: 12 },
-            formatter: (name) => name.length > 8 ? name.slice(0, 8) + '…' : name
+            pageTextStyle: { fontSize: 11, color: '#718096' },
+            textStyle: { color: '#263b59', fontSize: 12 },
+            formatter: null
         },
         grid: {
             top: 70,
@@ -3262,22 +3377,19 @@ function renderMainChart() {
             type: "category",
             data: years,
             name: "年份",
-            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
-            axisLabel: { color: isDark ? '#dbeafe' : '#263b59', hideOverlap: true }
+            axisLine: { lineStyle: { color: '#9fb1c8' } },
+            axisLabel: { color: '#263b59', hideOverlap: true }
         },
         yAxis: {
-            name: (() => {
-                const n = custom.yName !== "auto" ? custom.yName : metric;
-                return n.length > 10 ? n.slice(0, 10) + '…' : n;
-            })(),
-            nameTooltip: custom.yName !== "auto" ? custom.yName : metric,
+            name: custom.yName !== "auto" ? custom.yName : metric,
             nameLocation: 'middle',
-            nameGap: 50,
+            nameGap: 60,
+            nameTextStyle: { overflow: 'break', width: 80 },
             min: 0,
             max: custom.yMax !== "auto" ? Number(custom.yMax) : null,
-            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
-            axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
-            splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
+            axisLine: { lineStyle: { color: '#9fb1c8' } },
+            axisLabel: { color: '#263b59', formatter: fmtAxisNum },
+            splitLine: { lineStyle: { color: '#d8e1ec', type: 'dashed' } }
         },
         series: series
     }, true);
@@ -3309,17 +3421,73 @@ function pauseCarouselDueToInteraction() {
     if (inactivityTimer) clearTimeout(inactivityTimer);
     isCarouselPaused = true;
     inactivityTimer = setTimeout(() => {
+        // 如果鼠标仍在图表卡片上，不恢复轮播，等 mouseleave 时再恢复
+        if (isMouseOverMainChart || mainCarouselManualPaused) return;
         isCarouselPaused = false;
         startCarousel();
     }, INACTIVITY_DELAY);
 }
 
+function toggleMainCarousel() {
+    mainCarouselManualPaused = !mainCarouselManualPaused;
+    const btn = document.getElementById("main-pause-carousel");
+    if (!btn) return;
+    if (mainCarouselManualPaused) {
+        isCarouselPaused = true;
+        stopCarousel();
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px"><polygon points="6 4 20 12 6 20 6 4"/></svg>开始轮播';
+    } else {
+        // 手动恢复：若鼠标仍在卡片上，保持 hover-pause；否则立即恢复
+        isCarouselPaused = isMouseOverMainChart;
+        if (!isMouseOverMainChart) startCarousel();
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播';
+    }
+}
+
+function togglePieCarousel() {
+    pieManualPaused = !pieManualPaused;
+    const btn = document.getElementById("pie-pause-carousel");
+    if (!btn) return;
+    if (pieManualPaused) {
+        piePaused = true;
+        stopPieCarousel();
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px"><polygon points="6 4 20 12 6 20 6 4"/></svg>开始轮播';
+    } else {
+        // 手动恢复：若鼠标仍在卡片上，保持 hover-pause；否则立即恢复
+        piePaused = isMouseOverAnalysis;
+        if (!isMouseOverAnalysis) startPieCarousel();
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播';
+    }
+}
+
 // ======================= 饼图 =======================
 
 function initPieChart() {
-    const provinceRows = window.workbook["省份"];
+    stopAdvCarousel(); // 切换到饼图时停止排名图轮播，避免其定时器重新覆盖面板显示状态
+    // Switch to pie view: show pie panels, hide adv panels
+    const avPieLeft  = document.getElementById("av-pie-left");
+    const avAdvLeft  = document.getElementById("av-adv-left");
+    const avPieRight = document.getElementById("av-pie-right");
+    const avAdvRight = document.getElementById("av-adv-right");
+    if (avPieLeft)  avPieLeft.style.display  = '';
+    if (avAdvLeft)  avAdvLeft.style.display  = 'none';
+    if (avPieRight) avPieRight.style.display = '';
+    if (avAdvRight) avAdvRight.style.display = 'none';
+    // Swap toolbar
+    const pieTb = document.getElementById("av-pie-toolbar");
+    const advTb = document.getElementById("advanced-toolbar");
+    if (pieTb) pieTb.style.display = 'flex';
+    if (advTb) advTb.style.display = 'none';
+    // Update titles
+    const titleEl = document.getElementById("av-card-title");
+    if (titleEl) titleEl.textContent = "总-分结构饼图";
+    const leftTitle = document.getElementById("av-left-title");
+    if (leftTitle) leftTitle.textContent = "省份列表";
+
+    // 饼图始终用省份数据；选了"全国"工作表时回退到省份表
+    const provinceRows = window.workbook["省份"] || window.workbook[analysisSheet];
     if (!provinceRows || provinceRows.length === 0) {
-        pieChart?.setOption({ 
+        pieChart?.setOption({
             title: { text: "省份表为空", left: "center", top: "center" },
             backgroundColor: 'transparent'
         });
@@ -3379,7 +3547,6 @@ function initPieChart() {
     const invertBtn = document.getElementById("pie-invert-select");
     const resetBtn = document.getElementById("pie-reset-select");
     const clearBtn = document.getElementById("pie-clear-select");
-    const resetHiddenBtn = document.getElementById("pie-reset-hidden");
     if (selectAllBtn) selectAllBtn.onclick = () => applyPieProvinceSelection(pieProvinceList);
     if (invertBtn) invertBtn.onclick = () => {
         const inverted = pieProvinceList.filter(p => !pieSelectedProvinces.has(p));
@@ -3387,7 +3554,6 @@ function initPieChart() {
     };
     if (resetBtn) resetBtn.onclick = () => applyPieProvinceSelection(pieProvinceList);
     if (clearBtn) clearBtn.onclick = () => applyPieProvinceSelection([]);
-    if (resetHiddenBtn) resetHiddenBtn.onclick = () => applyPieProvinceSelection(pieProvinceList);
     syncPieProvinceCheckboxes();
     
     // 扫描所有行，只要某列在任意一行有数值就纳入指标
@@ -3439,24 +3605,6 @@ function initPieChart() {
         };
     }
     
-    const prevBtn = document.getElementById("pie-year-prev");
-    const nextBtn = document.getElementById("pie-year-next");
-    if (prevBtn) prevBtn.onclick = () => {
-        let idx = pieAvailableYears.indexOf(pieCurrentYear);
-        if (idx > 0) {
-            pieCurrentYear = pieAvailableYears[idx-1];
-            if (yearSel) yearSel.value = pieCurrentYear;
-            renderPieChart();
-        }
-    };
-    if (nextBtn) nextBtn.onclick = () => {
-        let idx = pieAvailableYears.indexOf(pieCurrentYear);
-        if (idx < pieAvailableYears.length-1) {
-            pieCurrentYear = pieAvailableYears[idx+1];
-            if (yearSel) yearSel.value = pieCurrentYear;
-            renderPieChart();
-        }
-    };
     
     pieCarouselQueue = [];
     for (let y of pieAvailableYears) {
@@ -3500,7 +3648,8 @@ function renderPieChart() {
     }
     const metric = pieAvailableMetrics[pieCurrentMetricIndex];
     const year = pieCurrentYear;
-    const provinceRows = window.workbook["省份"]?.filter(r => String(r["年份"]) === String(year)) || [];
+    // 饼图始终用省份表数据；analysisSheet 可能是"全国"，回退到"省份"
+    const provinceRows = (window.workbook["省份"] || window.workbook[analysisSheet])?.filter(r => String(r["年份"]) === String(year)) || [];
     
     if (provinceRows.length === 0 || provinceRows.every(r => r[metric] === undefined || r[metric] === null)) {
         pieChart?.clear();
@@ -3546,7 +3695,6 @@ function renderPieChart() {
     
     let pieSeriesData = [];
     const colorPalette = [...COLORS];
-    const isDark = document.body.classList.contains('dark-mode');
     
     normalData.forEach((item, idx) => {
         let percent = (item.value / total) * 100;
@@ -3571,7 +3719,7 @@ function renderPieChart() {
                 value: Math.sqrt(hiddenPercent),
                 realPercent: hiddenPercent,
                 originalVal: hiddenSum,
-                itemStyle: { color: isDark ? '#94a3b8' : '#718096' }
+                itemStyle: { color: '#718096' }
             });
         }
     }
@@ -3584,19 +3732,13 @@ function renderPieChart() {
             name: `数据缺失省份 (${neverExist.length}省)`,
             value: 0,
             originalVal: 0,
-            itemStyle: { color: isDark ? '#475569' : '#cbd5e0' }
+            itemStyle: { color: '#cbd5e0' }
         });
     }
     
     const totalNote = totalSource === "province_sum" ? `（基于${provinceRows.length}省数值总和${formatValue(total)}计算）` : "";
     const unit = getUnit(metric);
     
-    // 用像素坐标精确对齐花心装饰圆与花瓣中心
-    const _cw = pieChart.getWidth();
-    const _ch = pieChart.getHeight();
-    const _cx = _cw * 0.42;
-    const _cy = _ch * 0.54;
-
     // notMerge=true 清除切换图表类型留下的轴线/grid 残留
     pieChart?.setOption({
         backgroundColor: 'transparent',
@@ -3610,17 +3752,17 @@ function renderPieChart() {
             left: "42%",
             textAlign: "center",
             top: 10,
-            textStyle: { color: isDark ? '#e8f2ff' : '#1f2b48', fontSize: 15, fontWeight: 700 },
-            subtextStyle: { color: isDark ? '#a0bedd' : '#5a7a9a', fontSize: 11 }
+            textStyle: { color: '#1f2b48', fontSize: 15, fontWeight: 700 },
+            subtextStyle: { color: '#5a7a9a', fontSize: 11 }
         },
         tooltip: {
             trigger: "item",
             confine: true,
-            backgroundColor: isDark ? 'rgba(15,22,40,0.96)' : 'rgba(255,255,255,0.97)',
-            borderColor: isDark ? 'rgba(100,130,200,0.3)' : 'rgba(90,103,216,0.25)',
+            backgroundColor: 'rgba(255,255,255,0.97)',
+            borderColor: 'rgba(90,103,216,0.25)',
             borderWidth: 1,
             padding: [10, 14],
-            textStyle: { color: isDark ? '#e8f4ff' : '#1a2540', fontSize: 13 },
+            textStyle: { color: '#1a2540', fontSize: 13 },
             extraCssText: 'border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);',
             formatter: (params) => {
                 if (params.name.startsWith("数据缺失省份")) {
@@ -3647,23 +3789,11 @@ function renderPieChart() {
             itemHeight: 10,
             itemGap: 7,
             pageIconSize: 10,
-            pageTextStyle: { fontSize: 11, color: isDark ? '#8fa6c8' : '#718096' },
-            textStyle: { color: isDark ? '#cce0ff' : '#263b59', fontSize: 11.5 },
-            formatter: (name) => name.length > 7 ? name.slice(0, 7) + '…' : name
+            pageTextStyle: { fontSize: 11, color: '#718096' },
+            textStyle: { color: '#263b59', fontSize: 11.5 },
+            formatter: null
         },
-        graphic: [{
-            type: 'circle',
-            x: _cx,
-            y: _cy,
-            shape: { r: 28 },
-            style: {
-                fill: isDark ? 'rgba(15,22,40,0.7)' : 'rgba(245,248,255,0.85)',
-                stroke: isDark ? 'rgba(90,110,180,0.25)' : 'rgba(90,103,216,0.18)',
-                lineWidth: 1.5,
-                shadowBlur: 12,
-                shadowColor: isDark ? 'rgba(90,103,216,0.3)' : 'rgba(90,103,216,0.15)'
-            }
-        }],
+        graphic: [],   // 先清空，rAF 后用实际尺寸精确定位
         series: [{
             type: "pie",
             roseType: "area",
@@ -3675,7 +3805,7 @@ function renderPieChart() {
             itemStyle: {
                 borderRadius: 4,
                 borderWidth: 1.5,
-                borderColor: isDark ? 'rgba(10,15,30,0.6)' : 'rgba(255,255,255,0.7)',
+                borderColor: 'rgba(255,255,255,0.7)',
                 shadowBlur: 0
             },
             minAngle: 1.5,
@@ -3686,7 +3816,7 @@ function renderPieChart() {
                     show: true,
                     fontSize: 12,
                     fontWeight: 600,
-                    color: isDark ? '#e8f4ff' : '#1a2540',
+                    color: '#1a2540',
                     formatter: (params) => {
                         const pct = (params.data?.realPercent ?? params.percent).toFixed(1);
                         return `${params.name}\n${pct}%`;
@@ -3696,12 +3826,37 @@ function renderPieChart() {
                     shadowBlur: 20,
                     shadowColor: 'rgba(90,103,216,0.5)',
                     borderWidth: 2,
-                    borderColor: isDark ? 'rgba(150,170,230,0.5)' : 'rgba(90,103,216,0.4)'
+                    borderColor: 'rgba(90,103,216,0.4)'
                 }
             }
         }]
     }, true);
-    
+
+    // 花心装饰圆：setOption 后用 rAF 重新读取实际像素坐标，避免 resize 后错位
+    requestAnimationFrame(() => {
+        if (!pieChart || pieChart.isDisposed?.()) return;
+        const _w = pieChart.getWidth(), _h = pieChart.getHeight();
+        if (!_w || !_h) return;
+        pieChart.setOption({ graphic: [{
+            type: 'circle',
+            x: _w * 0.42, y: _h * 0.54,
+            shape: { r: 28 },
+            style: { fill: 'rgba(245,248,255,0.85)', stroke: 'rgba(90,103,216,0.18)', lineWidth: 1.5, shadowBlur: 12, shadowColor: 'rgba(90,103,216,0.15)' }
+        }] });
+    });
+
+    // 独立 resize 监听：窗口大小变化时（含小屏切大屏）自动同步花心位置
+    // 只注册一次；pieChart 是模块变量，闭包里始终拿到最新实例
+    if (!window._pieCenterResizeHooked) {
+        window._pieCenterResizeHooked = true;
+        window.addEventListener('resize', debounce(() => {
+            if (!pieChart || pieChart.isDisposed?.()) return;
+            const _w = pieChart.getWidth(), _h = pieChart.getHeight();
+            if (!_w || !_h) return;
+            pieChart.setOption({ graphic: [{ x: _w * 0.42, y: _h * 0.54 }] });
+        }, 180));
+    }
+
     pieChart?.off('legendselectchanged');
     pieChart?.on('legendselectchanged', (params) => {
         const clickedName = params.name;
@@ -3727,9 +3882,13 @@ function renderPieChart() {
 // ======================= 高级分析（排名对比图）=======================
 
 function initAdvancedAnalysis() {
+    advRows = originalRows.map(r => ({...r}));
+    advSheet = currentSheet;
+    const advSel = document.getElementById("sheet-list-adv");
+    if (advSel) advSel.value = advSheet;
     advMetrics = [...valueFields];
     advCurrentMetricIndex = 0;
-    advYears = [...new Set(originalRows.map(r => r["年份"]))].sort();
+    advYears = [...new Set(advRows.map(r => r["年份"]))].filter(Boolean).sort();
     advCurrentYear = advYears.length ? advYears[advYears.length-1] : null;
     renderRankUI();
 }
@@ -3737,6 +3896,14 @@ function initAdvancedAnalysis() {
 function renderRankUI() {
     const toolbar = document.getElementById("advanced-toolbar");
     if (!toolbar) return;
+    // Show adv toolbar, hide pie toolbar; update card title
+    toolbar.style.display = '';
+    const pieTb = document.getElementById("av-pie-toolbar");
+    if (pieTb) pieTb.style.display = 'none';
+    const titleEl = document.getElementById("av-card-title");
+    if (titleEl) titleEl.textContent = "指数排名";
+    const leftTitle = document.getElementById("av-left-title");
+    if (leftTitle) leftTitle.textContent = "地区列表";
     toolbar.innerHTML = `
         <div class="tool-pill"><label>指标</label><select id="adv-metric-select"></select></div>
         <div class="tool-pill"><label>年份</label><select id="adv-year-select"></select></div>
@@ -3744,11 +3911,6 @@ function renderRankUI() {
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
             暂停轮播
         </button>
-        <button id="adv-refresh" class="action-btn" type="button">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><use href="#ico-refresh"/></svg>
-            刷新
-        </button>
-        <span class="help-dot" title="排名对比图：左侧勾选地区，右侧柱状图对比。">?</span>
     `;
     
     const metricSel = document.getElementById("adv-metric-select");
@@ -3785,7 +3947,6 @@ function renderRankUI() {
     }
     
     document.getElementById("adv-pause-carousel")?.addEventListener("click", toggleAdvCarousel);
-    document.getElementById("adv-refresh")?.addEventListener("click", () => renderAdvancedChart());
     
     startAdvCarousel();
     renderAdvancedChart();
@@ -3799,7 +3960,7 @@ function startAdvCarousel() {
         advCurrentMetricIndex = (advCurrentMetricIndex + 1) % advMetrics.length;
         const metricSel = document.getElementById("adv-metric-select");
         if (metricSel) metricSel.value = advCurrentMetricIndex;
-        renderAdvancedChart();
+        renderAdvancedChart(true); // fromCarousel=true：只更新图表，不重建左侧列表 DOM
     }, 5000);
 }
 
@@ -3808,49 +3969,50 @@ function stopAdvCarousel() {
 }
 
 function toggleAdvCarousel() {
-    advPaused = !advPaused;
+    advManualPaused = !advManualPaused;
     const btn = document.getElementById("adv-pause-carousel");
-    if (btn) {
-        if (advPaused) {
-            btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px"><polygon points="6 4 20 12 6 20 6 4"/></svg>开始轮播';
-        } else {
-            btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播';
-        }
+    if (advManualPaused) {
+        advPaused = true;
+        stopAdvCarousel();
+        if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px"><polygon points="6 4 20 12 6 20 6 4"/></svg>开始轮播';
+    } else {
+        // 手动恢复：若鼠标仍在卡片上，保持 hover-pause；否则立即恢复
+        advPaused = isMouseOverAnalysis;
+        if (!isMouseOverAnalysis) startAdvCarousel();
+        if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>暂停轮播';
     }
-    if (!advPaused) startAdvCarousel();
-    else stopAdvCarousel();
 }
 
-function renderAdvancedChart() {
-    if (!advancedChart) return;
+function renderAdvancedChart(fromCarousel = false) {
+    if (!advMetrics?.length) return;
     const metric = advMetrics[advCurrentMetricIndex];
     const year = advCurrentYear;
     if (!metric || !year) {
-        advancedChart.setOption({ 
+        advancedChart?.setOption({
             title: { text: "无可用指标或年份", left: "center", top: "center" },
             backgroundColor: 'transparent'
         });
         return;
     }
-    const sampleRow = originalRows.find(r => r["年份"] === year && r[metric] !== undefined);
+    const sampleRow = advRows.find(r => r["年份"] === year && r[metric] !== undefined);
     const isNumeric = sampleRow && typeof sampleRow[metric] === "number";
     if (!isNumeric) {
         renderCategoryStats(metric, year);
         return;
     }
-    renderRankCompareChart(metric, year);
+    renderRankCompareChart(metric, year, fromCarousel);
 }
 
-function renderRankCompareChart(metric, year) {
-    const dataForYear = originalRows.filter(r => r["年份"] === year);
-    const allRegions = new Set(originalRows.map(r => r["地区"]));
+function renderRankCompareChart(metric, year, fromCarousel = false) {
+    const dataForYear = advRows.filter(r => r["年份"] === year);
+    const allRegions = new Set(advRows.map(r => r["地区"]));
     const regionData = [];
     
     for (let region of allRegions) {
         let row = dataForYear.find(r => r["地区"] === region);
-        let val = row ? row[metric] : 0;
-        if (typeof val !== 'number' || isNaN(val)) val = 0;
-        regionData.push({ name: region, value: val });
+        let val = (row && row[metric] !== null && row[metric] !== undefined) ? row[metric] : null;
+        if (typeof val === 'number' && isNaN(val)) val = null;
+        regionData.push({ name: region, value: val });   // null 在排名图中会被跳过
     }
     
     regionData.sort((a,b) => {
@@ -3863,94 +4025,107 @@ function renderRankCompareChart(metric, year) {
     });
     
     rankFullData = regionData;
-    if (rankSelectedIndices.size === 0) {
-        rankSelectedIndices.clear();
+    if (rankSelectedNames.size === 0 || fromCarousel) {
+        rankSelectedNames.clear();
         let validCount = 0;
         for (let i = 0; i < regionData.length && validCount < 10; i++) {
             if (typeof regionData[i].value === 'number' && !isNaN(regionData[i].value)) {
-                rankSelectedIndices.add(i);
+                rankSelectedNames.add(regionData[i].name);
                 validCount++;
             }
         }
     }
     
-    const container = document.getElementById("advanced-content");
-    if (!container) return;
+    // Show adv panels, hide pie panels
+    const avPieLeft  = document.getElementById("av-pie-left");
+    const avAdvLeft  = document.getElementById("av-adv-left");
+    const avPieRight = document.getElementById("av-pie-right");
+    const avAdvRight = document.getElementById("av-adv-right");
+    if (avPieLeft)  avPieLeft.style.display  = 'none';
+    if (avAdvLeft)  avAdvLeft.style.display  = 'flex';
+    if (avPieRight) avPieRight.style.display = 'none';
+    if (avAdvRight) avAdvRight.style.display = '';
 
-    // 销毁旧的 ECharts 实例，防止内存泄漏
-    if (advancedChart) { advancedChart.dispose(); advancedChart = null; }
-
-    container.innerHTML = `<div class="rank-list-container" id="rank-list-panel"></div><div class="rank-chart-container" id="rank-chart-panel"></div>`;
-    
-    const listPanel = document.getElementById("rank-list-panel");
-    if (listPanel) {
-        listPanel.innerHTML = `
-            <div class="rank-region-search">
-                <input id="rank-region-search-input" type="text" placeholder="搜索地区" value="${escapeHtml(rankRegionSearchTerm)}">
-                <button id="rank-region-search-clear" class="mini-btn" type="button">清除</button>
-            </div>
-            <div class="rank-region-meta" id="rank-region-meta"></div>
-            <div class="rank-region-list" id="rank-region-list"></div>
-        `;
+    const listPanel = avAdvLeft;
+    // 共享的列表渲染函数——无论初建还是用户操作都用同一份逻辑
+    const buildRankList = (data) => {
         const listBody = document.getElementById("rank-region-list");
-        const meta = document.getElementById("rank-region-meta");
-        const renderFilteredRankList = () => {
-            if (!listBody) return;
-            const keyword = rankRegionSearchTerm.trim().toLowerCase();
-            const indexed = regionData.map((item, idx) => ({ item, idx }));
-            const filtered = keyword
-                ? indexed.filter(({ item }) => String(item.name || '').toLowerCase().includes(keyword))
-                : indexed;
-            if (meta) meta.textContent = keyword ? `显示 ${filtered.length} / ${regionData.length} 个地区` : `共 ${regionData.length} 个地区`;
-            listBody.innerHTML = "";
-            if (!filtered.length) {
-                listBody.innerHTML = '<div class="rank-empty">未找到匹配地区</div>';
-                return;
-            }
-            filtered.forEach(({ item, idx }) => {
+        const meta     = document.getElementById("rank-region-meta");
+        if (!listBody) return;
+        const keyword  = rankRegionSearchTerm.trim().toLowerCase();
+        const indexed  = data.map((item, idx) => ({ item, idx }));
+        const filtered = keyword
+            ? indexed.filter(({ item }) => String(item.name || '').toLowerCase().includes(keyword))
+            : indexed;
+        if (meta) meta.textContent = keyword
+            ? `显示 ${filtered.length} / ${data.length} 个地区`
+            : `共 ${data.length} 个地区`;
+        listBody.innerHTML = "";
+        if (!filtered.length) {
+            listBody.innerHTML = '<div class="rank-empty">未找到匹配地区</div>';
+            return;
+        }
+        filtered.forEach(({ item, idx }) => {
             const div = document.createElement("div");
-            div.className = "rank-list-item";
+            const isChecked = rankSelectedNames.has(item.name);
+            div.className = "rank-list-item" + (isChecked ? " active" : "");
             const cb = document.createElement("input");
             cb.type = "checkbox";
-            cb.checked = rankSelectedIndices.has(idx);
+            cb.checked = isChecked;
             cb.onchange = (e) => {
-                if (e.target.checked) rankSelectedIndices.add(idx);
-                else rankSelectedIndices.delete(idx);
+                if (e.target.checked) { rankSelectedNames.add(item.name); div.classList.add("active"); }
+                else { rankSelectedNames.delete(item.name); div.classList.remove("active"); }
                 updateRankChart();
             };
-            const rankSpan = document.createElement("span");
-            rankSpan.className = "rank";
-            rankSpan.innerText = `${idx+1}`;
-            const nameSpan = document.createElement("span");
-            nameSpan.className = "name";
-            nameSpan.innerText = item.name;
+            const rankSpan  = document.createElement("span");
+            rankSpan.className  = "rank";
+            rankSpan.innerText  = `${idx + 1}`;
+            const nameSpan  = document.createElement("span");
+            nameSpan.className  = "name";
+            nameSpan.innerText  = item.name;
             const valueSpan = document.createElement("span");
             valueSpan.className = "value";
-            let valDisplay = (typeof item.value === 'number' && !isNaN(item.value)) ? item.value.toFixed(2) : "无数据";
-            valueSpan.innerText = valDisplay;
+            valueSpan.innerText = (typeof item.value === 'number' && !isNaN(item.value))
+                ? item.value.toFixed(2) : "无数据";
             div.appendChild(cb);
             div.appendChild(rankSpan);
             div.appendChild(nameSpan);
             div.appendChild(valueSpan);
-                listBody.appendChild(div);
-            });
-        };
-        const search = document.getElementById("rank-region-search-input");
-        const clear = document.getElementById("rank-region-search-clear");
-        if (search) {
-            search.oninput = (e) => {
-                rankRegionSearchTerm = e.target.value;
-                renderFilteredRankList();
-            };
+            listBody.appendChild(div);
+        });
+    };
+
+    if (listPanel) {
+        const alreadyBuilt = !!document.getElementById("rank-region-list");
+
+        if (!alreadyBuilt) {
+            // 首次进入排名模式：构建完整面板骨架
+            listPanel.innerHTML = `
+                <div class="panel-section rank-region-search">
+                    <input id="rank-region-search-input" type="text" placeholder="搜索地区，Enter/Esc 清空" value="${escapeHtml(rankRegionSearchTerm)}" style="width:100%;margin-top:4px;">
+                </div>
+                <div class="rank-region-meta panel-label" id="rank-region-meta" style="padding:4px 12px;"></div>
+                <div class="rank-region-list indicator-list" id="rank-region-list"></div>
+            `;
+            const search = document.getElementById("rank-region-search-input");
+            if (search) {
+                search.oninput = (e) => {
+                    rankRegionSearchTerm = e.target.value;
+                    buildRankList(rankFullData);
+                };
+                search.onkeydown = (e) => {
+                    if ((e.key === 'Enter' || e.key === 'Escape') && search.value.trim()) {
+                        e.preventDefault();
+                        rankRegionSearchTerm = "";
+                        search.value = "";
+                        buildRankList(rankFullData);
+                    }
+                };
+            }
         }
-        if (clear) {
-            clear.onclick = () => {
-                rankRegionSearchTerm = "";
-                if (search) search.value = "";
-                renderFilteredRankList();
-            };
-        }
-        renderFilteredRankList();
+
+        // 始终完整重建列表，确保排名顺序和勾选状态与当前指标对应
+        buildRankList(regionData);
     }
     
     const chartPanel = document.getElementById("rank-chart-panel");
@@ -3962,60 +4137,118 @@ function renderRankCompareChart(metric, year) {
 }
 
 function updateRankChart() {
-    const selectedData = Array.from(rankSelectedIndices)
-        .map(idx => rankFullData[idx])
-        .filter(d => d && typeof d.value === 'number' && !isNaN(d.value));
+    const selectedData = rankFullData
+        .filter(d => rankSelectedNames.has(d.name) && typeof d.value === 'number' && !isNaN(d.value));
     selectedData.sort((a, b) => b.value - a.value);
-    
-    const isDark = document.body.classList.contains('dark-mode');
     
     const option = {
         backgroundColor: 'transparent',
-        title: { 
-            text: `${advMetrics[advCurrentMetricIndex]} 对比`, 
+        title: {
+            text: `${advMetrics[advCurrentMetricIndex]} 对比`,
             left: "center",
-            textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
+            textStyle: { color: '#1f2b48' }
         },
-        tooltip: { 
-            trigger: "axis", 
+        tooltip: {
+            trigger: "axis",
             axisPointer: { type: "shadow" },
-            backgroundColor: isDark ? 'rgba(26,31,46,0.95)' : 'rgba(255,255,255,0.95)',
+            backgroundColor: 'rgba(255,255,255,0.95)',
             borderColor: '#667eea',
-            textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
+            textStyle: { color: '#1f2b48' }
         },
         grid: { containLabel: true, left: "15%" },
-        xAxis: { 
-            type: "value", 
+        xAxis: {
+            type: "value",
             name: advMetrics[advCurrentMetricIndex],
-            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
-            axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
-            splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
+            axisLine: { lineStyle: { color: '#9fb1c8' } },
+            axisLabel: { color: '#263b59' },
+            splitLine: { lineStyle: { color: '#d8e1ec', type: 'dashed' } }
         },
-        yAxis: { 
-            type: "category", 
-            data: selectedData.map(d => d.name), 
-            axisLabel: { fontSize: 11, color: isDark ? '#dbeafe' : '#263b59' },
-            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } }
+        yAxis: {
+            type: "category",
+            data: selectedData.map(d => d.name),
+            axisLabel: { fontSize: 11, color: '#263b59' },
+            axisLine: { lineStyle: { color: '#9fb1c8' } }
         },
         series: [{
             type: "bar",
             data: selectedData.map(d => d.value),
-            itemStyle: { 
+            itemStyle: {
                 color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
                     { offset: 0, color: '#667eea' },
                     { offset: 1, color: '#764ba2' }
                 ]),
                 borderRadius: [0, 4, 4, 0]
             },
-            label: { show: true, position: "right", color: isDark ? '#dbeafe' : '#263b59' }
+            label: { show: true, position: "right", color: '#263b59' }
         }]
     };
     
     if (rankChart) rankChart.setOption(option, true);
+
+    // 更新排名注释文字
+    const annotEl = document.getElementById("rank-annotation");
+    if (!annotEl || !rankFullData || rankFullData.length === 0) return;
+
+    const metric = advMetrics[advCurrentMetricIndex];
+    const year = advCurrentYear;
+    const fmt = v => parseFloat(v.toFixed(4)).toString();
+
+    // 用全量数据判断是否为 0/1 型指标（排除缺失值）
+    const allMetricVals = advRows
+        .map(r => r[metric])
+        .filter(v => typeof v === 'number' && !isNaN(v));
+    const isBinary = allMetricVals.length > 0 && allMetricVals.every(v => v === 0 || v === 1);
+
+    // 已勾选城市（含缺失）
+    const allSelected = rankFullData.filter(d => rankSelectedNames.has(d.name));
+    // 已勾选中有有效数值的
+    const selectedValid = allSelected.filter(d => typeof d.value === 'number' && !isNaN(d.value));
+
+    if (allSelected.length === 0) {
+        annotEl.textContent = "";
+        return;
+    }
+
+    if (allSelected.length === 1) {
+        // 单城市：直接说明该城市数据
+        const d = allSelected[0];
+        const hasVal = typeof d.value === 'number' && !isNaN(d.value);
+        if (!hasVal) {
+            annotEl.textContent = `已选城市中，${year}年${d.name}暂无${metric}数据。`;
+        } else if (isBinary) {
+            const label = d.value === 1 ? '"是"' : '"否"';
+            annotEl.textContent = `已选城市中，${year}年${d.name}的${metric}为${label}。`;
+        } else {
+            annotEl.textContent = `已选城市中，${year}年${d.name}的${metric}为${fmt(d.value)}。`;
+        }
+        return;
+    }
+
+    if (isBinary) {
+        // 0/1 型：按"是"/"否"分组列出
+        const yesNames = selectedValid.filter(d => d.value === 1).map(d => d.name);
+        const noNames  = selectedValid.filter(d => d.value === 0).map(d => d.name);
+        let text = `已选城市中，${metric}为"是"的有：${yesNames.length ? yesNames.join("、") : "无"}；为"否"的有：${noNames.length ? noNames.join("、") : "无"}。`;
+        const naNames = allSelected.filter(d => !(typeof d.value === 'number' && !isNaN(d.value))).map(d => d.name);
+        if (naNames.length) text += `其中${naNames.join("、")}暂无数据。`;
+        annotEl.textContent = text;
+        return;
+    }
+
+    // 多城市普通数值型：最高/最低
+    if (selectedValid.length === 0) { annotEl.textContent = ""; return; }
+    const sorted = [...selectedValid].sort((a, b) => b.value - a.value);
+    const highest = sorted[0];
+    const lowest  = sorted[sorted.length - 1];
+    if (highest === lowest) {
+        annotEl.textContent = `已选城市中，${year}年${highest.name}的${metric}为${fmt(highest.value)}。`;
+    } else {
+        annotEl.textContent = `已选城市中，${year}年${highest.name}的${metric}排名最高，为${fmt(highest.value)}；同年${lowest.name}的${metric}排名最低，为${fmt(lowest.value)}。`;
+    }
 }
 
 function renderCategoryStats(metric, year) {
-    const dataForYear = originalRows.filter(r => r["年份"] === year);
+    const dataForYear = advRows.filter(r => r["年份"] === year);
     const freqMap = new Map();
     dataForYear.forEach(row => {
         let val = row[metric];
@@ -4026,41 +4259,44 @@ function renderCategoryStats(metric, year) {
     });
     
     if (freqMap.size === 0) {
-        advancedChart?.setOption({ 
+        const chartPanel = document.getElementById("rank-chart-panel");
+        if (chartPanel && (!rankChart || rankChart.isDisposed?.())) rankChart = initEChartSafe(chartPanel);
+        rankChart?.setOption({
             title: { text: `无有效分类数据 (${metric})`, left: "center", top: "center" },
             backgroundColor: 'transparent'
         });
         return;
     }
-    
+
     const sorted = Array.from(freqMap.entries()).sort((a,b) => b[1] - a[1]);
-    const isDark = document.body.classList.contains('dark-mode');
-    
-    advancedChart?.setOption({
+    const chartPanel2 = document.getElementById("rank-chart-panel");
+    if (chartPanel2 && (!rankChart || rankChart.isDisposed?.())) rankChart = initEChartSafe(chartPanel2);
+
+    rankChart?.setOption({
         backgroundColor: 'transparent',
-        title: { 
-            text: `${metric} 分类频次统计 (${year}年)`, 
+        title: {
+            text: `${metric} 分类频次统计 (${year}年)`,
             left: "center",
-            textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
+            textStyle: { color: '#1f2b48' }
         },
-        tooltip: { 
-            trigger: "axis", 
+        tooltip: {
+            trigger: "axis",
             axisPointer: { type: "shadow" },
-            backgroundColor: isDark ? 'rgba(26,31,46,0.95)' : 'rgba(255,255,255,0.95)',
-            textStyle: { color: isDark ? '#f7fafc' : '#1f2b48' }
+            backgroundColor: 'rgba(255,255,255,0.95)',
+            textStyle: { color: '#1f2b48' }
         },
-        xAxis: { 
-            type: "category", 
-            data: sorted.map(s => s[0]), 
-            axisLabel: { rotate: 30, color: isDark ? '#dbeafe' : '#263b59' },
-            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } }
+        xAxis: {
+            type: "category",
+            data: sorted.map(s => s[0]),
+            axisLabel: { rotate: 30, color: '#263b59' },
+            axisLine: { lineStyle: { color: '#9fb1c8' } }
         },
-        yAxis: { 
-            type: "value", 
+        yAxis: {
+            type: "value",
             name: "出现次数",
-            axisLine: { lineStyle: { color: isDark ? '#8aa4c8' : '#9fb1c8' } },
-            axisLabel: { color: isDark ? '#dbeafe' : '#263b59' },
-            splitLine: { lineStyle: { color: isDark ? '#334766' : '#d8e1ec', type: 'dashed' } }
+            axisLine: { lineStyle: { color: '#9fb1c8' } },
+            axisLabel: { color: '#263b59' },
+            splitLine: { lineStyle: { color: '#d8e1ec', type: 'dashed' } }
         },
         series: [{ 
             type: "bar", 
@@ -4079,6 +4315,10 @@ function renderCategoryStats(metric, year) {
 
 let currentSearchTerm = "";
 let tableActiveMetricFilter = "";  // 当前选中的指标列筛选
+
+// 统计值和热力图范围缓存，仅在 applyFilterAndSort 时重算，renderTablePage 直接复用
+let _cachedStats = {};
+let _cachedColRange = {};
 
 function applyFilterAndSort() {
     let filtered = [...tableRows];
@@ -4109,13 +4349,14 @@ function applyFilterAndSort() {
     }
     // 关键词全文搜索（在已过滤结果上继续筛）
     if (searchVal) {
-        filtered = filtered.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(searchVal.toLowerCase())));
+        const sv = searchVal.toLowerCase();
+        filtered = filtered.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(sv)));
     }
 
     if (sortKey) {
         filtered.sort((a,b) => {
-            let av = a[sortKey], bv = b[sortKey];
-            if (!isNaN(Number(av)) && !isNaN(Number(bv))) return sortType === "asc" ? av - bv : bv - av;
+            const av = a[sortKey], bv = b[sortKey];
+            if (typeof av === 'number' && typeof bv === 'number') return sortType === "asc" ? av - bv : bv - av;
             return sortType === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
         });
     }
@@ -4133,6 +4374,44 @@ function applyFilterAndSort() {
     let sortMsg = sortKey ? `当前排序：${sortKey} ${sortType === "asc" ? "↑ 升序" : "↓ 降序"}` : "无";
     const sortStatus = document.getElementById("sort-status");
     if (sortStatus) sortStatus.innerHTML = `${sortMsg}（点击表头排序）`;
+
+    // 过滤/排序后一次性计算统计值和热力图范围，renderTablePage 直接复用，不在每页渲染时重算
+    _cachedStats = {};
+    _cachedColRange = {};
+    const isYearLike = h => h === '年份' || h === '时间';
+    const isRegionLike = h => h === '地区';
+    const numericFields = tableHeaders.filter(h => {
+        if (isYearLike(h) || isRegionLike(h)) return false;
+        const sample = filteredRowsForPage[0];
+        return sample && typeof sample[h] === 'number';
+    });
+    numericFields.forEach(field => {
+        const values = [];
+        for (let i = 0; i < filteredRowsForPage.length; i++) {
+            const v = filteredRowsForPage[i][field];
+            if (typeof v === 'number' && !isNaN(v)) values.push(v);
+        }
+        if (values.length === 0) {
+            _cachedStats[field] = { sum: '-', avg: '-', median: '-', min: '-', max: '-' };
+            return;
+        }
+        // 单次遍历求 sum/min/max，避免 Math.min(...arr) 展开大数组
+        let sum = 0, mn = values[0], mx = values[0];
+        for (let i = 0; i < values.length; i++) {
+            sum += values[i];
+            if (values[i] < mn) mn = values[i];
+            if (values[i] > mx) mx = values[i];
+        }
+        const avg = sum / values.length;
+        const sorted = values.slice().sort((a, b) => a - b);
+        const mid = sorted.length >> 1;
+        const median = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+        _cachedStats[field] = {
+            sum: sum.toFixed(2), avg: avg.toFixed(2),
+            median: median.toFixed(2), min: mn.toFixed(2), max: mx.toFixed(2)
+        };
+        if (mx > mn) _cachedColRange[field] = { min: mn, range: mx - mn };
+    });
 }
 
 // 填充年份和指标下拉，并绑定事件
@@ -4176,44 +4455,23 @@ function initTableSmartFilters() {
     }
 }
 
+let _renderTableRaf = null;
 function renderTablePage() {
+    if (_renderTableRaf) cancelAnimationFrame(_renderTableRaf);
+    _renderTableRaf = requestAnimationFrame(_doRenderTablePage);
+}
+function _doRenderTablePage() {
+    _renderTableRaf = null;
     const start = (currentPage - 1) * pageSize;
-    const end = start + pageSize;
-    const pageData = filteredRowsForPage.slice(start, end);
+    const pageData = filteredRowsForPage.slice(start, start + pageSize);
     const searchVal = currentSearchTerm;
     const visible = tableHeaders.filter(h => visibleColumns.has(h));
     const isYearLikeColumn = h => h === '\u5e74\u4efd' || h === '\u65f6\u95f4';
     const isRegionLikeColumn = h => h === '\u5730\u533a';
     
-    // 计算统计值
-    const stats = {};
-    const numericFields = tableHeaders.filter(h => {
-        if (isYearLikeColumn(h) || isRegionLikeColumn(h)) return false;
-        if (h === '年份' || h === '地区') return false;
-        const sample = filteredRowsForPage[0];
-        return sample && typeof sample[h] === 'number';
-    });
-    
-    numericFields.forEach(field => {
-        const values = filteredRowsForPage.map(row => row[field]).filter(v => typeof v === 'number' && !isNaN(v));
-        if (values.length === 0) {
-            stats[field] = { sum: '-', avg: '-', median: '-', min: '-', max: '-' };
-            return;
-        }
-        const sum = values.reduce((a,b) => a + b, 0);
-        const avg = sum / values.length;
-        const sorted = [...values].sort((a,b) => a - b);
-        const median = sorted.length % 2 === 0 ? (sorted[sorted.length/2 - 1] + sorted[sorted.length/2]) / 2 : sorted[Math.floor(sorted.length/2)];
-        const min = sorted[0];
-        const max = sorted[sorted.length - 1];
-        stats[field] = { 
-            sum: sum.toFixed(2), 
-            avg: avg.toFixed(2), 
-            median: median.toFixed(2), 
-            min: min.toFixed(2), 
-            max: max.toFixed(2) 
-        };
-    });
+    // 直接复用 applyFilterAndSort 里已算好的缓存，不重算
+    const stats = _cachedStats;
+    const colRange = _cachedColRange;
     
     // 构建表头
     const thead = document.createElement('thead');
@@ -4231,10 +4489,7 @@ function renderTablePage() {
         headerRow.appendChild(th);
         
         const td = document.createElement('td');
-        td.style.fontSize = '11px';
-        td.style.fontWeight = 'normal';
-        td.style.backgroundColor = 'var(--bg-hover)';
-        td.style.borderBottom = '1px solid var(--border-color)';
+        td.className = 'stats-cell';
         if (isYearLikeColumn(h) || isRegionLikeColumn(h)) {
             td.textContent = isYearLikeColumn(h) ? '\u5e74\u4efd\u8303\u56f4' : '\u5730\u533a\u5217\u8868';
             statsRow.appendChild(td);
@@ -4256,53 +4511,44 @@ function renderTablePage() {
     
     thead.appendChild(headerRow);
     thead.appendChild(statsRow);
-    
-    // 计算每列数值范围（用于热力图着色）
-    const colRange = {};
-    visible.forEach(h => {
-        if (isYearLikeColumn(h) || isRegionLikeColumn(h)) return;
-        if (h === '年份' || h === '地区') return;
-        const vals = filteredRowsForPage.map(r => r[h]).filter(v => typeof v === 'number' && !isNaN(v));
-        if (vals.length) {
-            const mn = Math.min(...vals), mx = Math.max(...vals);
-            colRange[h] = { min: mn, max: mx, range: mx - mn };
-        }
-    });
-    
-    // 构建数据行
+
+    // 构建数据行（DocumentFragment + for 循环，减少 reflow）
+    const hlRegex = searchVal ? new RegExp(`(${escapeRegex(searchVal)})`, 'gi') : null;
     const tbody = document.createElement('tbody');
-    pageData.forEach(row => {
+    const bFrag = document.createDocumentFragment();
+    for (let i = 0; i < pageData.length; i++) {
+        const row = pageData[i];
         const tr = document.createElement('tr');
-        visible.forEach(h => {
+        for (let j = 0; j < visible.length; j++) {
+            const h = visible[j];
             const td = document.createElement('td');
-            let val = row[h] ?? '';
-            let txt = val;
-            if (searchVal) {
-                const regex = new RegExp(`(${escapeRegex(searchVal)})`, 'gi');
-                txt = String(txt).replace(regex, `<span class="highlight-red">$1</span>`);
+            const val = row[h] ?? '';
+            if (hlRegex) {
+                hlRegex.lastIndex = 0;
+                td.innerHTML = String(val).replace(hlRegex, '<span class="highlight-red">$1</span>');
+            } else {
+                td.textContent = val;
             }
-            td.innerHTML = txt;
-            // 热力图着色：数值列根据相对大小着色
-            if (colRange[h] && colRange[h].range > 0 && typeof val === 'number') {
-                const ratio = (val - colRange[h].min) / colRange[h].range;
-                const isDark = document.body.classList.contains('dark-mode');
-                if (isDark) {
-                    td.style.background = `rgba(102,126,234,${ratio * 0.4})`;
-                } else {
-                    td.style.background = `rgba(102,126,234,${ratio * 0.18})`;
-                }
-                td.title = `数值: ${val} | 排位: ${Math.round(ratio*100)}%`;
+            // 热力图着色
+            const cr = colRange[h];
+            if (cr && typeof val === 'number') {
+                const ratio = (val - cr.min) / cr.range;
+                td.style.background = `rgba(102,126,234,${(ratio * 0.18).toFixed(3)})`;
+                td.title = `数值: ${val} | 排位: ${Math.round(ratio * 100)}%`;
             }
             tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
-    });
-    
+        }
+        bFrag.appendChild(tr);
+    }
+    tbody.appendChild(bFrag);
+
     const table = document.getElementById('data-table');
     if (table) {
+        const tFrag = document.createDocumentFragment();
+        tFrag.appendChild(thead);
+        tFrag.appendChild(tbody);
         table.innerHTML = '';
-        table.appendChild(thead);
-        table.appendChild(tbody);
+        table.appendChild(tFrag);
         
         const pageCurrent = document.getElementById('page-current');
         const pageGoto = document.getElementById('page-goto');
@@ -4406,7 +4652,6 @@ function getChartSVGString(chartInstance) {
 
 function exportChart(chartInstance, type, filename) {
     if (!chartInstance) return;
-    const isDark = document.body.classList.contains('dark-mode');
     try {
         if (type === 'svg') {
             const svgStr = getChartSVGString(chartInstance);
@@ -4425,13 +4670,10 @@ function exportChart(chartInstance, type, filename) {
             setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
             return;
         }
-        // PNG/JPG — for pie charts in dark mode use white background to avoid invisible slices
-        const isPie = filename && filename.includes('pie');
-        const bgColor = (isDark && !isPie) ? '#1a1f2e' : '#ffffff';
         const url = chartInstance.getDataURL({
             type: type === 'jpg' ? 'jpeg' : 'png',
             pixelRatio: 2,
-            backgroundColor: bgColor
+            backgroundColor: '#ffffff'
         });
         const link = document.createElement('a');
         link.download = `${filename}.${type}`;
@@ -4527,7 +4769,7 @@ function renderControls(type) {
         yDiv.innerHTML = `<span>Y轴指标：</span><select id="scatter-y">${metrics.map(m => `<option value="${m}" ${m === defaultY ? 'selected' : ''}>${m}</option>`).join('')}</select>`;
         container.appendChild(yDiv);
         
-        const defaultRegions = currentTable === 'city' ? regions.slice(0, 50) : regions.slice(0, 6);
+        const defaultRegions = regions;
         const regionDiv = document.createElement('div');
         regionDiv.className = 'scatter-region-section scatter-region-control';
         regionDiv.innerHTML = `
@@ -4536,8 +4778,7 @@ function renderControls(type) {
                 <div class="scatter-region-actions">
                     <input id="scatter-region-search" class="scatter-search-input" type="text" placeholder="搜索地区">
                     <button type="button" class="scatter-tag-action" id="scatter-select-all">全选</button>
-                    <button type="button" class="scatter-tag-action ghost" id="scatter-clear-all">清空地区</button>
-                    <button type="button" class="scatter-tag-action ghost" id="scatter-select-visible">选择搜索结果</button>
+                    <button type="button" class="scatter-tag-action ghost" id="scatter-clear-all">清空所选地区</button>
                 </div>
             </div>
             <div id="scatter-region-chips" class="scatter-region-chips"></div>
@@ -4546,20 +4787,19 @@ function renderControls(type) {
             </select>
             <div id="scatter-selected-summary" class="scatter-selected-summary">已选择 ${defaultRegions.length} 个地区</div>
         `;
-        container.appendChild(regionDiv);
-        
         const btn = document.createElement('button');
-        btn.innerText = '生成散点图';
+        btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg> 生成图表';
         btn.className = 'analysis-run-btn';
         btn.onclick = () => loadChart(type);
         container.appendChild(btn);
+
+        container.appendChild(regionDiv);
 
         
         setTimeout(() => {
             const tableEl = document.getElementById('scatter-table');
             const selectAll = document.getElementById('scatter-select-all');
             const clearAll = document.getElementById('scatter-clear-all');
-            const selectVisible = document.getElementById('scatter-select-visible');
             const selectEl = document.getElementById('scatter-regions');
             const searchEl = document.getElementById('scatter-region-search');
             const chipsEl = document.getElementById('scatter-region-chips');
@@ -4599,12 +4839,6 @@ function renderControls(type) {
             if (searchEl) searchEl.oninput = renderScatterRegionOptions;
             if (selectAll) selectAll.onclick = () => { syncHiddenSelect(new Set(regions)); renderScatterRegionOptions(); };
             if (clearAll) clearAll.onclick = () => { syncHiddenSelect(new Set()); renderScatterRegionOptions(); };
-            if (selectVisible) selectVisible.onclick = () => {
-                const selected = getSelected();
-                chipsEl?.querySelectorAll('.region-chip').forEach(chip => selected.add(chip.dataset.region));
-                syncHiddenSelect(selected);
-                renderScatterRegionOptions();
-            };
             renderScatterRegionOptions();
             normalizeScatterControlText();
         }, 50);
@@ -4637,11 +4871,9 @@ function normalizeScatterControlText() {
     const selectAll = document.getElementById('scatter-select-all');
     if (selectAll) selectAll.textContent = '全选';
     const clearAll = document.getElementById('scatter-clear-all');
-    if (clearAll) clearAll.textContent = '清空地区';
-    const selectVisible = document.getElementById('scatter-select-visible');
-    if (selectVisible) selectVisible.textContent = '选择搜索结果';
+    if (clearAll) clearAll.textContent = '清空所选地区';
     const run = document.querySelector('#analysis-controls .analysis-run-btn');
-    if (run) run.textContent = '生成散点图';
+    if (run) run.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg> 生成图表';
     const selected = document.getElementById('scatter-regions');
     const summary = document.getElementById('scatter-selected-summary');
     if (selected && summary) summary.textContent = `已选择 ${selected.selectedOptions.length} 个地区`;
@@ -4660,14 +4892,15 @@ function hasPotentialMissingValueProcessingFromText(text) {
 
 // ── 查看大图辅助 ──────────────────────────────────────
 function _addViewFullBtn(chartDom, onClick) {
-    const old = chartDom.parentElement?.querySelector('.view-full-btn');
+    const old = chartDom.querySelector('.view-full-btn');
     if (old) old.remove();
     const btn = document.createElement('button');
     btn.className = 'view-full-btn';
     btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg> 查看大图`;
-    btn.style.cssText = 'margin:6px 0 0 auto;display:flex;align-items:center;gap:4px;font-size:.78rem;color:var(--c-muted);background:none;border:1px solid var(--c-border);border-radius:4px;padding:3px 10px;cursor:pointer;float:right;';
+    btn.style.cssText = 'position:absolute;bottom:10px;right:10px;z-index:10;display:flex;align-items:center;gap:4px;font-size:.78rem;color:var(--c-muted);background:rgba(255,255,255,.88);backdrop-filter:blur(4px);border:1px solid var(--c-border);border-radius:6px;padding:4px 10px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.08);';
     btn.onclick = onClick;
-    chartDom.insertAdjacentElement('afterend', btn);
+    if (getComputedStyle(chartDom).position === 'static') chartDom.style.position = 'relative';
+    chartDom.appendChild(btn);
 }
 
 function _openRawEchartsModal(option, title, height = 520) {
@@ -4713,18 +4946,18 @@ function renderBubbleControls(container) {
         <div class="control-group"><span>气泡大小：</span>
             <select id="bubble-size">${metrics.map((m,i)=>`<option value="${m}"${i===2?' selected':''}>${m}</option>`).join('')}</select>
         </div>
-        <div class="scatter-region-section" style="flex:1 1 100%;margin-top:6px;">
-            <div class="scatter-region-header" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <button class="analysis-run-btn" onclick="loadChart('bubble')"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg> 生成图表</button>
+        <div class="scatter-region-section" style="flex:1 1 100%;margin-top:4px;">
+            <div class="scatter-region-header" style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                 <span class="scatter-region-label">地区</span>
                 <input id="bubble-region-search" class="scatter-search-input" type="text" placeholder="搜索省份">
                 <button type="button" class="scatter-tag-action" id="bubble-select-all">全选</button>
-                <button type="button" class="scatter-tag-action ghost" id="bubble-clear-all">清空</button>
+                <button type="button" class="scatter-tag-action ghost" id="bubble-clear-all">清空所选地区</button>
             </div>
             <div class="scatter-region-chips" id="bubble-region-chips"></div>
             <select id="bubble-regions" multiple style="display:none"></select>
             <div class="scatter-selected-summary" id="bubble-region-summary"></div>
-        </div>
-        <button class="action-btn" onclick="loadChart('bubble')" style="margin-top:8px">生成气泡图</button>`;
+        </div>`;
 
     // 渲染芯片
     function syncBubbleHidden() {
@@ -4768,30 +5001,30 @@ function renderButterflyControls(container) {
     const defA = regions[0] || '广东省';
     const defB = regions[1] || '江苏省';
 
+    // 与散点图完全相同结构：控件直接 append 到 container（grid 子项），卡片 grid-column:1/-1
     container.innerHTML = `
-        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;">
-            <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
-                <div class="control-group"><span>年份：</span>
-                    <select id="butterfly-year">${years.map(y=>`<option value="${y}"${y===defYear?' selected':''}>${y}</option>`).join('')}</select>
-                </div>
-                <div class="control-group"><span>省份A（左）：</span>
-                    <select id="butterfly-a">${regions.map(r=>`<option value="${r}"${r===defA?' selected':''}>${r}</option>`).join('')}</select>
-                </div>
-                <div class="control-group"><span>省份B（右）：</span>
-                    <select id="butterfly-b">${regions.map(r=>`<option value="${r}"${r===defB?' selected':''}>${r}</option>`).join('')}</select>
-                </div>
-                <button class="action-btn" onclick="loadChart('butterfly')">生成蝴蝶图</button>
-            </div>
-            <div style="flex:1 1 100%;margin-top:4px;">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                    <span style="font-size:.82rem;color:var(--c-text2);font-weight:600;">选择对比指标</span>
+        <div class="control-group"><span>年份：</span>
+            <select id="butterfly-year">${years.map(y=>`<option value="${y}"${y===defYear?' selected':''}>${y}</option>`).join('')}</select>
+        </div>
+        <div class="control-group"><span>省份A（左）：</span>
+            <select id="butterfly-a">${regions.map(r=>`<option value="${r}"${r===defA?' selected':''}>${r}</option>`).join('')}</select>
+        </div>
+        <div class="control-group"><span>省份B（右）：</span>
+            <select id="butterfly-b">${regions.map(r=>`<option value="${r}"${r===defB?' selected':''}>${r}</option>`).join('')}</select>
+        </div>
+        <button class="analysis-run-btn" onclick="loadChart('butterfly')"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg> 生成图表</button>
+        <div class="scatter-region-section scatter-region-control bf-metric-section">
+            <div class="scatter-region-header">
+                <span class="scatter-region-label">选择对比指标</span>
+                <div class="scatter-region-actions">
                     <button type="button" class="scatter-tag-action" id="bf-select-all">全选</button>
                     <button type="button" class="scatter-tag-action ghost" id="bf-clear-all">清空</button>
-                    <button type="button" class="scatter-tag-action ghost" id="bf-top10">差异最大前10</button>
+                    <button type="button" class="scatter-tag-action ghost" id="bf-top10">差异前10</button>
                 </div>
-                <div class="scatter-region-chips" id="butterfly-metric-chips" style="max-height:160px;"></div>
-                <select id="butterfly-metrics" multiple style="display:none"></select>
             </div>
+            <div class="scatter-region-chips" id="butterfly-metric-chips"></div>
+            <div class="scatter-selected-summary" id="bf-metric-summary"></div>
+            <select id="butterfly-metrics" multiple style="display:none"></select>
         </div>`;
 
     const selectedBF = new Set(metrics.slice(0, 10));
@@ -4809,10 +5042,18 @@ function renderButterflyControls(container) {
             btn.className = 'region-chip' + (selectedBF.has(m) ? ' active' : '');
             btn.textContent = m;
             btn.title = m;
-            btn.onclick = () => { selectedBF.has(m)?selectedBF.delete(m):selectedBF.add(m); btn.classList.toggle('active',selectedBF.has(m)); syncBFHidden(); };
+            btn.onclick = () => {
+                selectedBF.has(m) ? selectedBF.delete(m) : selectedBF.add(m);
+                btn.classList.toggle('active', selectedBF.has(m));
+                syncBFHidden();
+                const summary = document.getElementById('bf-metric-summary');
+                if (summary) summary.textContent = `已选择 ${selectedBF.size} 个指标`;
+            };
             chips.appendChild(btn);
         });
         syncBFHidden();
+        const summary = document.getElementById('bf-metric-summary');
+        if (summary) summary.textContent = `已选择 ${selectedBF.size} 个指标`;
     }
     renderBFChips();
     document.getElementById('bf-select-all')?.addEventListener('click', () => { metrics.forEach(m=>selectedBF.add(m)); renderBFChips(); });
@@ -4861,26 +5102,26 @@ async function loadChart(type) {
         if (!points.length) { showToast('所选条件无数据', 'warn'); return; }
         const sVals = points.map(p => p.s);
         const sMin = Math.min(...sVals), sMax = Math.max(...sVals);
-        const isDark = document.body.classList.contains('dark-mode');
         chartDom.style.height = '500px';
         currentChartInstance = initEChartSafe(chartDom);
         const bubbleOption = {
             backgroundColor: 'transparent',
-            title: { text: `${year}年  ${xMetric} · ${yMetric} · ${sMetric}`, left: 'center', textStyle: { color: isDark?'#f7fafc':'#1f2b48', fontSize: 13 } },
+            title: { text: `${year}年  ${xMetric} · ${yMetric} · ${sMetric}`, left: 'center', textStyle: { color: '#1f2b48', fontSize: 13 } },
             tooltip: { formatter: p => `<b>${p.data[3]}</b><br/>${xMetric}: ${(+p.data[0])?.toFixed(4)}<br/>${yMetric}: ${(+p.data[1])?.toFixed(4)}<br/>${sMetric}: ${(+p.data[2])?.toFixed(4)}` },
-            xAxis: { name: xMetric, nameLocation: 'middle', nameGap: 30, axisLabel: { color: isDark?'#dbeafe':'#263b59' }, splitLine: { lineStyle: { color: isDark?'#334766':'#d8e1ec', type:'dashed' } } },
-            yAxis: { name: yMetric, nameLocation: 'middle', nameGap: 44, axisLabel: { color: isDark?'#dbeafe':'#263b59' }, splitLine: { lineStyle: { color: isDark?'#334766':'#d8e1ec', type:'dashed' } } },
+            xAxis: { name: xMetric, nameLocation: 'middle', nameGap: 30, axisLabel: { color: '#263b59' }, splitLine: { lineStyle: { color: '#d8e1ec', type:'dashed' } } },
+            yAxis: { name: yMetric, nameLocation: 'middle', nameGap: 44, axisLabel: { color: '#263b59' }, splitLine: { lineStyle: { color: '#d8e1ec', type:'dashed' } } },
             series: [{
                 type: 'scatter',
                 data: points.map(p => [p.x, p.y, p.s, p.name]),
                 symbolSize: val => { const r = sMax===sMin ? 0.5 : (val[2]-sMin)/(sMax-sMin); return 14 + r*50; },
                 itemStyle: { color: p => COLORS[p.dataIndex % COLORS.length], opacity: 0.82 },
-                label: { show: true, formatter: p => p.data[3], position: 'top', fontSize: 11, color: isDark?'#dbeafe':'#263b59' }
+                label: { show: true, formatter: p => p.data[3], position: 'top', fontSize: 11, color: '#263b59' }
             }]
         };
         currentChartInstance.setOption(bubbleOption, true);
-        // 查看大图按钮
-        _addViewFullBtn(chartDom, () => _openRawEchartsModal(bubbleOption, `气泡图 · ${year}年`));
+        ensureScatterInteractionHint('bubble');
+        _addViewFullBtn(chartDom, () => _openRawEchartsModal(bubbleOption, `${year}年`));
+        setTimeout(() => { try { currentChartInstance.resize(); } catch(e) {} }, 100);
         return;
     }
 
@@ -4901,15 +5142,17 @@ async function loadChart(type) {
             return { m, a: a/mx, b: b/mx, rawA: a, rawB: b };
         }).filter(Boolean);
         if (!pairs.length) { showToast('所选指标无有效数据', 'warn'); return; }
-        const labels = pairs.map(p => p.m.length > 14 ? p.m.slice(0,14)+'…' : p.m);
-        const isDark = document.body.classList.contains('dark-mode');
-        // 动态高度：每行 36px，最少 400px
-        const chartH = Math.max(400, pairs.length * 36 + 120);
+        const labels = pairs.map(p => p.m);
+        const showLabels = pairs.length <= 12; // 超过12个指标时隐藏数值标签，避免重叠
+        const _bfMob = window.innerWidth <= 680;
+        // 动态高度：每行移动端 28px、桌面 36px，最少 400px
+        const fitHeight = fitAnalysisPanelToViewport();
+        const chartH = Math.max(fitHeight, pairs.length * (_bfMob ? 28 : 36) + 120);
         chartDom.style.height = chartH + 'px';
         currentChartInstance = initEChartSafe(chartDom);
         const bfOption = {
             backgroundColor: 'transparent',
-            title: { text: `${year}年  ${regA} vs ${regB}  指标对比`, left: 'center', textStyle: { color: isDark?'#f7fafc':'#1f2b48', fontSize: 13 } },
+            title: { text: `${year}年  ${regA} vs ${regB}  指标对比`, left: 'center', textStyle: { color: '#1f2b48', fontSize: _bfMob ? 11 : 13 } },
             tooltip: {
                 trigger: 'axis', axisPointer: { type: 'shadow' },
                 formatter: params => {
@@ -4917,32 +5160,39 @@ async function loadChart(type) {
                     return p ? `<b>${p.m}</b><br/>${regA}: ${p.rawA?.toFixed(4)}<br/>${regB}: ${p.rawB?.toFixed(4)}` : '';
                 }
             },
-            legend: { data: [regA, regB], top: 28, textStyle: { color: isDark?'#dbeafe':'#263b59' } },
-            grid: { left: 20, right: 20, top: 62, bottom: 16, containLabel: true },
+            legend: { data: [regA, regB], top: 28, textStyle: { color: '#263b59', fontSize: _bfMob ? 10 : 12 } },
+            grid: { left: _bfMob ? 4 : 20, right: _bfMob ? 4 : 20, top: 62, bottom: 16, containLabel: true },
             xAxis: {
                 type: 'value',
-                axisLabel: { formatter: v => Math.abs(v).toFixed(2), color: isDark?'#dbeafe':'#263b59', fontSize: 11 },
-                splitLine: { lineStyle: { color: isDark?'#334766':'#d8e1ec', type:'dashed' } }
+                axisLabel: { formatter: v => Math.abs(v).toFixed(2), color: '#263b59', fontSize: _bfMob ? 9 : 11 },
+                splitLine: { lineStyle: { color: '#d8e1ec', type:'dashed' } }
             },
-            yAxis: { type: 'category', data: labels, axisLabel: { color: isDark?'#dbeafe':'#263b59', fontSize: 11, width: 110, overflow:'truncate' } },
+            yAxis: { type: 'category', data: labels, axisLabel: {
+                color: '#263b59',
+                fontSize: _bfMob ? 9 : 11,
+                overflow: 'truncate',
+                width: _bfMob ? 72 : 140,
+                hideOverlap: false
+            } },
             series: [
                 {
                     name: regA, type: 'bar', stack: 'total',
                     data: pairs.map(p => -Math.abs(p.a)),
                     itemStyle: { color: COLORS[0], opacity: 0.85 },
-                    label: { show: true, position: 'insideLeft', formatter: p => pairs[p.dataIndex]?.rawA?.toFixed(3), color: '#fff', fontSize: 10 }
+                    label: { show: showLabels, position: 'insideLeft', formatter: p => pairs[p.dataIndex]?.rawA?.toFixed(3), color: '#fff', fontSize: 10 }
                 },
                 {
                     name: regB, type: 'bar', stack: 'total',
                     data: pairs.map(p => Math.abs(p.b)),
                     itemStyle: { color: COLORS[2], opacity: 0.85 },
-                    label: { show: true, position: 'insideRight', formatter: p => pairs[p.dataIndex]?.rawB?.toFixed(3), color: '#fff', fontSize: 10 }
+                    label: { show: showLabels, position: 'insideRight', formatter: p => pairs[p.dataIndex]?.rawB?.toFixed(3), color: '#fff', fontSize: 10 }
                 }
             ]
         };
         currentChartInstance.setOption(bfOption, true);
-        // 查看大图按钮
-        _addViewFullBtn(chartDom, () => _openRawEchartsModal(bfOption, `蝴蝶图 · ${year}年 ${regA} vs ${regB}`, Math.max(600, chartH)));
+        ensureScatterInteractionHint('butterfly');
+        _addViewFullBtn(chartDom, () => _openRawEchartsModal(bfOption, `${year}年 ${regA} vs ${regB}`, Math.max(600, chartH)));
+        setTimeout(() => currentChartInstance.resize({ height: chartH }), 100);
         return;
     }
 
@@ -4957,12 +5207,20 @@ async function loadChart(type) {
         if (!regions.length) { showToast('请至少选择一个地区', 'warn'); return; }
         
         try {
-            const res = await fetch('/api/scatter', {
+            const res = await fetch(API_BASE + '/api/scatter', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ table, year, xMetric, yMetric, regions })
             });
-            const data = await res.json();
+            const rawText = await res.text();
+            let data;
+            try { data = JSON.parse(rawText); } catch {
+                // 服务器返回了 HTML（如 CORS 错误或 Nginx 错误页），直接显示原始内容便于排查
+                const preview = rawText.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+                chartDom.innerHTML = `<div class="chart-empty-state"><strong>服务器错误 ${res.status}</strong><span style="font-size:11px;word-break:break-all">${escapeHtml(preview)}</span></div>`;
+                console.error('[scatter] 服务器返回非 JSON:', rawText.slice(0, 500));
+                return;
+            }
             if (!res.ok || !Array.isArray(data.data) || !data.data.length) {
                 const message = data?.error || '当前筛选条件下没有可绘制的散点数据';
                 chartDom.innerHTML = `<div class="chart-empty-state"><strong>无法生成散点图</strong><span>${escapeHtml(message)}</span></div>`;
@@ -4971,17 +5229,43 @@ async function loadChart(type) {
                 return;
             }
             
-            const isDark = document.body.classList.contains('dark-mode');
             const isCityScatter = table === 'city';
+
+            // 计算每个点的局部密度（归一化坐标下半径内的邻居数）
+            const pts = data.data;
+            const xs = pts.map(d => +d[0]), ys = pts.map(d => +d[1]);
+            const xSpan = (Math.max(...xs) - Math.min(...xs)) || 1;
+            const ySpan = (Math.max(...ys) - Math.min(...ys)) || 1;
+            const densityR = 0.18; // 归一化半径
+            const densities = pts.map((p, i) => {
+                let cnt = 0;
+                pts.forEach((q, j) => {
+                    if (i !== j) {
+                        const dx = (p[0] - q[0]) / xSpan;
+                        const dy = (p[1] - q[1]) / ySpan;
+                        if (dx*dx + dy*dy < densityR*densityR) cnt++;
+                    }
+                });
+                return cnt;
+            });
+            const maxDensity = Math.max(...densities, 1);
+            // 密度映射：低 → 浅蓝，高 → 深蓝
+            const densityColor = idx => {
+                const t = densities[idx] / maxDensity; // 0~1
+                const r = Math.round(191 - t * 152); // 191→39
+                const g = Math.round(219 - t * 156); // 219→63
+                const b = Math.round(254 - t *  54); // 254→200
+                return `rgb(${r},${g},${b})`;
+            };
             const scatterText = {
-                title: isDark ? '#f8fbff' : '#10213f',
-                axis: isDark ? '#f1f5ff' : '#17233d',
-                axisName: isDark ? '#f8fbff' : '#0f1f3a',
-                axisLine: isDark ? '#9fb7dc' : '#60789d',
-                splitLine: isDark ? '#405576' : '#c7d4e5',
-                label: isDark ? '#ffffff' : '#0f1f3a',
-                labelBorder: isDark ? 'rgba(2,6,23,.86)' : 'rgba(255,255,255,.96)',
-                tooltip: isDark ? '#f8fbff' : '#10213f'
+                title: '#10213f',
+                axis: '#17233d',
+                axisName: '#0f1f3a',
+                axisLine: '#60789d',
+                splitLine: '#c7d4e5',
+                label: '#0f1f3a',
+                labelBorder: 'rgba(255,255,255,.96)',
+                tooltip: '#10213f'
             };
             
             const option = {
@@ -4995,8 +5279,8 @@ async function loadChart(type) {
                 tooltip: {
                     trigger: 'item',
                     confine: true,
-                    backgroundColor: isDark ? 'rgba(15,23,42,.94)' : 'rgba(255,255,255,.96)',
-                    borderColor: isDark ? '#334155' : '#d8e4f2',
+                    backgroundColor: 'rgba(255,255,255,.96)',
+                    borderColor: '#d8e4f2',
                     textStyle: { color: scatterText.tooltip, fontSize: 12, fontWeight: 700 },
                     formatter: p => {
                         const item = p.data || [];
@@ -5059,8 +5343,8 @@ async function loadChart(type) {
                             fontSize: 11,
                             fontWeight: 900,
                             color: scatterText.label,
-                            backgroundColor: isDark ? 'rgba(15,23,42,.86)' : 'rgba(255,255,255,.9)',
-                            borderColor: isDark ? '#475569' : '#d8e4f2',
+                            backgroundColor: 'rgba(255,255,255,.9)',
+                            borderColor: '#d8e4f2',
                             borderWidth: 1,
                             borderRadius: 6,
                             padding: [3, 6],
@@ -5073,25 +5357,25 @@ async function loadChart(type) {
                         }
                     },
                     itemStyle: {
-                        color: new echarts.graphic.RadialGradient(0.4, 0.3, 1, [
-                            { offset: 0, color: '#2563a8' },
-                            { offset: 1, color: '#1a8f8f' }
-                        ])
+                        color: p => densityColor(p.dataIndex),
+                        opacity: 0.85,
+                        borderColor: 'rgba(255,255,255,0.6)',
+                        borderWidth: 1
                     }
                 }]
             };
-            
+
             option.tooltip.formatter = p => {
                 const item = p.data || [];
                 return `<strong>${escapeHtml(item[2] || '')}</strong><br>${escapeHtml(data.xName || xMetric)}：${escapeHtml(item[0] ?? '')}<br>${escapeHtml(data.yName || yMetric)}：${escapeHtml(item[1] ?? '')}`;
             };
             option.title.text = `${table === 'city' ? '地级市' : '省份'} ${xMetric} vs ${yMetric} (${year}年)`;
-            const fitHeight = fitScatterPanelToViewport();
+            const fitHeight = fitAnalysisPanelToViewport();
             currentChartInstance = initEChartSafe(chartDom);
             currentChartInstance.setOption(option);
             window._lastScatterOption = option;
-            ensureScatterInteractionHint(table);
-            _addViewFullBtn(chartDom, () => _openRawEchartsModal(option, option.title?.text || '散点图'));
+            ensureScatterInteractionHint(table === 'city' ? 'city' : 'province');
+            _addViewFullBtn(chartDom, () => _openRawEchartsModal(option, option.title?.text || ''));
             setTimeout(() => currentChartInstance.resize({ height: fitHeight }), 100);
         } catch (e) {
             console.error('散点图加载失败:', e);
@@ -5099,29 +5383,36 @@ async function loadChart(type) {
     }
 }
 
-function ensureScatterInteractionHint(table) {
+function ensureScatterInteractionHint(type) {
     const chartDom = document.getElementById('analysis-chart');
     if (!chartDom) return;
     const old = document.getElementById('scatter-interaction-hint');
     if (old) old.remove();
+    const textMap = {
+        city:      '地级市点位较密：滚轮缩放、拖动平移，悬停查看城市名称，点击右下角”查看大图”进入沉浸式查看',
+        province:  '悬停点位查看数据，点击右下角”查看大图”进入沉浸式查看',
+        bubble:    '悬停气泡查看三维数据，气泡大小代表第三指标，点击右下角”查看大图”进入沉浸式查看',
+        butterfly: '左右长度代表各省数值大小，悬停查看具体数值，点击右下角”查看大图”进入沉浸式查看',
+    };
     const hint = document.createElement('div');
     hint.id = 'scatter-interaction-hint';
     hint.className = 'scatter-interaction-hint';
-    hint.textContent = table === 'city'
-        ? '地级市点位较密：滚轮缩放、拖动平移，悬停查看城市名称'
-        : '悬停点位查看数据，点击下方”查看大图”进入沉浸式查看';
+    hint.textContent = textMap[type] ?? textMap.province;
     chartDom.insertAdjacentElement('afterend', hint);
 }
 
-function fitScatterPanelToViewport() {
+function fitAnalysisPanelToViewport() {
     const section = document.getElementById('section-scatter');
     const panel = document.getElementById('analysis-panel');
     const chartDom = document.getElementById('analysis-chart');
     if (!section || !panel || !chartDom) return 520;
 
-    section.classList.add('scatter-fit-mode');
-    panel.style.maxHeight = 'none';
-    panel.style.overflow = 'visible';
+    // scatter-fit-mode 已在 openAnalysisPanel 开始时加上，此处无需重复添加
+    // 动画进行中时不解除 max-height，避免数据明细表闪现
+    if (!panel._animating) {
+        panel.style.maxHeight = 'none';
+        panel.style.overflow = 'visible';
+    }
 
     const viewportH = window.innerHeight || document.documentElement.clientHeight || 760;
     const chartH = Math.max(360, Math.min(470, Math.floor(viewportH * 0.42)));
@@ -5130,19 +5421,14 @@ function fitScatterPanelToViewport() {
     chartDom.style.height = `${chartH}px`;
     chartDom.style.minHeight = `${chartH}px`;
 
-    requestAnimationFrame(() => {
-        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-
     if (!window._scatterFitResizeBound) {
         window._scatterFitResizeBound = true;
         window.addEventListener('resize', debounce(() => {
-            const openPanel = document.getElementById('analysis-panel');
-            if (!openPanel?.classList.contains('open') || activeChart !== 'scatter') return;
-            const nextH = fitScatterPanelToViewport();
-            const chart = echarts.getInstanceByDom(document.getElementById('analysis-chart'));
-            if (chart) chart.resize({ height: nextH });
+            resizeActiveAnalysisChart();
         }, 120));
+        window.addEventListener('orientationchange', () => setTimeout(resizeActiveAnalysisChart, 180));
+        document.addEventListener('fullscreenchange', () => setTimeout(resizeActiveAnalysisChart, 180));
+        window.visualViewport?.addEventListener('resize', debounce(resizeActiveAnalysisChart, 120));
     }
 
     return chartH;
@@ -5164,12 +5450,30 @@ function updateAnalysisPanelUI(type, isOpen) {
 function closeAnalysisPanel() {
     const panel = document.getElementById('analysis-panel');
     if (!panel) return;
+    panel._animating = false;
+    panel.style.overflow = 'hidden';
+
+    // 展开后 maxHeight 是 'none'，CSS 无法从 none→0 过渡（会瞬间跳变）
+    // 必须先把 maxHeight 设回当前实际像素高度，强制 reflow，再动画到 0
+    panel.style.transition = 'none';
+    panel.style.maxHeight = panel.scrollHeight + 'px';
+    panel.offsetHeight; // 触发 reflow，让浏览器确认此高度为起点
+
+    panel.style.transition = 'max-height 0.3s cubic-bezier(0.4,0,0.2,1), margin-bottom 0.3s cubic-bezier(0.4,0,0.2,1)';
     panel.style.maxHeight = '0';
+    panel.style.marginBottom = '0';
     panel.classList.remove('open');
+    const section = document.getElementById('section-scatter');
     setTimeout(() => {
-        if (!panel.classList.contains('open')) panel.style.display = 'none';
-    }, 240);
+        if (!panel.classList.contains('open')) {
+            panel.style.display = 'none';
+            // scatter-fit-mode 在动画结束后再移除，避免收起途中按钮突然变大
+            section?.classList.remove('scatter-fit-mode');
+        }
+    }, 320);
     updateAnalysisPanelUI(activeChart, false);
+    section?.classList.remove('type-scatter', 'type-bubble', 'type-butterfly');
+    document.getElementById('scatter-interaction-hint')?.remove();
     activeChart = null;
     currentChartInstance = disposeChartInstance(currentChartInstance);
 }
@@ -5185,36 +5489,61 @@ function openAnalysisPanel(type) {
     }
     
     activeChart = type;
+    // 切换类型时清除上次残留的散点图提示
+    if (type !== 'scatter') document.getElementById('scatter-interaction-hint')?.remove();
+    // 标记当前图表类型（CSS 用此区分 scatter 与其他类型的控件布局）
+    const section = document.getElementById('section-scatter');
+    if (section) {
+        section.classList.toggle('type-scatter',   type === 'scatter');
+        section.classList.toggle('type-bubble',    type === 'bubble');
+        section.classList.toggle('type-butterfly', type === 'butterfly');
+        // scatter-fit-mode 在渲染控件 BEFORE，确保控件以紧凑尺寸渲染，不在动画中途突然缩小
+        section.classList.add('scatter-fit-mode');
+    }
     const titleMap = {
-        scatter:   '散点图 — 双指标关联分析',
-        bubble:    '气泡图 — 三维联合分析',
-        butterfly: '蝴蝶图 — 双省指标对比'
+        scatter:   '双指标关联分析',
+        bubble:    '三维联合分析',
+        butterfly: '双省指标对比'
     };
     const titleEl = document.getElementById('analysis-panel-title');
     if (titleEl) titleEl.innerText = titleMap[type] || type;
-    
-    // Animate open
+
+    // Highlight active card & render controls（已处于 scatter-fit-mode，尺寸稳定）
+    updateAnalysisPanelUI(type, true);
+    renderControls(type);
+
+    // Animate open — overflow:hidden 防止内容在动画期间穿透到下方 section-table
+    panel._animating = true;
     panel.style.display = 'block';
+    panel.style.overflow = 'hidden';
     panel.style.maxHeight = '0';
-    panel.style.overflow = 'visible';
-    panel.style.transition = 'max-height 0.4s cubic-bezier(0.4,0,0.2,1), opacity 0.24s ease';
+    panel.style.marginBottom = '0';
+    // margin-bottom 与 max-height 同步过渡，彻底消除下方数据明细表跳动
+    panel.style.transition = 'max-height 0.38s cubic-bezier(0.4,0,0.2,1), margin-bottom 0.38s cubic-bezier(0.4,0,0.2,1)';
     requestAnimationFrame(() => {
         panel.classList.add('open');
-        panel.style.maxHeight = Math.max(panel.scrollHeight + 80, 980) + 'px';
+        // 控件已渲染，scrollHeight 包含控件高度；再加图表占位高度
+        const chartPlaceholder = 500;
+        const estimatedH = panel.scrollHeight + chartPlaceholder + 60;
+        panel.style.maxHeight = Math.max(estimatedH, 1100) + 'px';
+        panel.style.marginBottom = '18px';  // 随 max-height 一起平滑出现
     });
-    
-    // Highlight active card
-    updateAnalysisPanelUI(type, true);
-    
-    renderControls(type);
-    
-    setTimeout(() => {
-        loadChart(type);
+
+    // 图表在动画期间后台加载，不干预 max-height（_animating 标志保护）
+    setTimeout(async () => {
+        await loadChart(type);
         bindExportEvents();
+    }, 150);
+
+    // 动画结束（380ms）后再统一解除 max-height，彻底消除数据明细表闪现
+    setTimeout(() => {
+        if (!panel.classList.contains('open')) return;
+        panel._animating = false;
+        panel.style.transition = 'none';
         panel.style.maxHeight = 'none';
         panel.style.overflow = 'visible';
-        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, 150);
+        resizeActiveAnalysisChart();
+    }, 420);
 }
 
 function exportAnalysisChart(format) {
@@ -5230,8 +5559,7 @@ function exportAnalysisChart(format) {
         console.warn('散点图未加载，请先展开分析面板');
         return;
     }
-    const isDark = document.body.classList.contains('dark-mode');
-    const bg = isDark ? '#1a2236' : '#ffffff';
+    const bg = '#ffffff';
     if (format === 'svg') {
         const svgStr = getChartSVGString(chart);
         if (!svgStr) {
@@ -5249,26 +5577,10 @@ function exportAnalysisChart(format) {
         setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
         return;
     }
-    let url;
-    if (format === 'png') url = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: bg });
-    else if (format === 'jpg') url = chart.getDataURL({ type: 'jpeg', pixelRatio: 2, backgroundColor: bg });
-    const link = document.createElement('a');
-    link.download = `scatter_${activeChart}_${Date.now()}.${format === 'jpg' ? 'jpg' : format}`;
-    link.href = url;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
 }
 
 function bindExportEvents() {
-    const bind = (id, fn) => {
-        const el = document.getElementById(id);
-        if (!el || el._exportBound) return;
-        el._exportBound = true;
-        el.addEventListener('click', fn);
-    };
-    bind('export-chart-png', () => exportAnalysisChart('png'));
-    bind('export-chart-jpg', () => exportAnalysisChart('jpg'));
+    // export buttons removed
 }
 
 function initAnalysisCards() {
@@ -5280,19 +5592,15 @@ function initAnalysisCards() {
         card._clickHandler = handler;
     });
     document.querySelectorAll('.analysis-toggle-btn').forEach(btn => {
-        if (btn._toggleBound) return;
-        btn._toggleBound = true;
-        btn.addEventListener('click', (event) => {
+        // 每次都先移除旧 handler 再重新绑，与卡片的处理方式保持一致
+        if (btn._toggleHandler) btn.removeEventListener('click', btn._toggleHandler);
+        btn._toggleHandler = (event) => {
             event.stopPropagation();
             openAnalysisPanel(btn.dataset.chart);
-        });
+        };
+        btn.addEventListener('click', btn._toggleHandler);
     });
     
-    const closeBtn = document.getElementById('close-panel');
-    if (closeBtn && !closeBtn._closeBound) {
-        closeBtn._closeBound = true;
-        closeBtn.addEventListener('click', closeAnalysisPanel);
-    }
 }
 
 function waitForWorkbook() {
@@ -5348,34 +5656,60 @@ function updateTableStats(rows) {
 function bindEvents() {
     if (bindEvents._bound) return;
     bindEvents._bound = true;
+
+    // 鼠标进入主图表卡片时暂停主轮播，离开后恢复（手动暂停时不覆盖）
+    const mainCard = document.getElementById("section-chart");
+    if (mainCard) {
+        const pauseMainCarousel = () => {
+            isMouseOverMainChart = true;
+            if (!mainCarouselManualPaused) isCarouselPaused = true;
+        };
+        const resumeMainCarousel = () => {
+            isMouseOverMainChart = false;
+            if (!mainCarouselManualPaused) {
+                isCarouselPaused = false;
+                // hover 期间 inactivity timer 可能没有重启 carousel，mouseleave 时补上
+                if (!carouselTimer) startCarousel();
+            }
+        };
+        mainCard.addEventListener("mouseenter", pauseMainCarousel);
+        mainCard.addEventListener("mouseleave", resumeMainCarousel);
+        mainCard.addEventListener("touchstart", pauseMainCarousel, { passive: true });
+        mainCard.addEventListener("touchend", () => setTimeout(resumeMainCarousel, 1200), { passive: true });
+    }
+
+    // 鼠标进入分析卡片区域时暂停所有轮播，离开后恢复并补启 timer（手动暂停时不覆盖）
+    const avCard = document.getElementById("section-analysis-view");
+    if (avCard) {
+        const pauseAnalysisCarousel = () => {
+            isMouseOverAnalysis = true;
+            if (!pieManualPaused) piePaused = true;
+            if (!advManualPaused) advPaused = true;
+        };
+        const resumeAnalysisCarousel = () => {
+            isMouseOverAnalysis = false;
+            if (!pieManualPaused) {
+                piePaused = false;
+                // timer 可能在 hover 期间被 stop，mouseleave 时补重启
+                if (!pieCarouselTimer) startPieCarousel();
+            }
+            if (!advManualPaused) {
+                advPaused = false;
+                if (!advCarouselTimer) startAdvCarousel();
+            }
+        };
+        avCard.addEventListener("mouseenter", pauseAnalysisCarousel);
+        avCard.addEventListener("mouseleave", resumeAnalysisCarousel);
+        avCard.addEventListener("touchstart", pauseAnalysisCarousel, { passive: true });
+        avCard.addEventListener("touchend", () => setTimeout(resumeAnalysisCarousel, 1200), { passive: true });
+    }
+
+    // 暂停按钮事件绑定
+    document.getElementById("main-pause-carousel")?.addEventListener("click", toggleMainCarousel);
+    document.getElementById("pie-pause-carousel")?.addEventListener("click", togglePieCarousel);
+
     document.getElementById("chart-type")?.addEventListener("change", () => renderMainChart());
     
-    document.getElementById("apply-set")?.addEventListener("click", () => {
-        custom.title = document.getElementById("chart-title")?.value || "auto";
-        custom.xName = document.getElementById("x-name")?.value || "auto";
-        custom.yName = document.getElementById("y-name")?.value || "auto";
-        custom.yMax = document.getElementById("y-max")?.value || "auto";
-        renderMainChart();
-    });
-    
-    document.getElementById("reset-set")?.addEventListener("click", () => {
-        custom = { title: "auto", xName: "auto", yName: "auto", yMax: "auto" };
-        const chartTitle = document.getElementById("chart-title");
-        const xName = document.getElementById("x-name");
-        const yName = document.getElementById("y-name");
-        const yMax = document.getElementById("y-max");
-        const chartTypeEl = document.getElementById("chart-type");
-        if (chartTitle) chartTitle.value = "";
-        if (xName) xName.value = "";
-        if (yName) yName.value = "";
-        if (yMax) yMax.value = "";
-        if (chartTypeEl) chartTypeEl.value = "auto";
-        renderMainChart();
-    });
-    
-    document.getElementById("export-csv")?.addEventListener("click", () => exportData("csv"));
-    document.getElementById("export-excel")?.addEventListener("click", () => exportData("xlsx"));
-    document.getElementById("print-table")?.addEventListener("click", printTable);
     
     const searchInput = document.getElementById("search-input");
     if (searchInput) {
@@ -5390,8 +5724,8 @@ function bindEvents() {
     if (scaleInput) {
         scaleInput.addEventListener("input", () => {
             const scale = parseFloat(scaleInput.value);
-            const tableWrap = document.querySelector(".table-wrap");
-            if (tableWrap) tableWrap.style.transform = `scale(${scale})`;
+            const dataTable = document.getElementById("data-table");
+            if (dataTable) dataTable.style.setProperty('--table-scale', scale);
             const scaleText = document.getElementById("scale-text");
             if (scaleText) scaleText.innerText = `${Math.round(scale * 100)}%`;
             let newPageSize = Math.floor(20 + (scale - 0.6) / 0.6 * 80);
@@ -5431,28 +5765,6 @@ function bindEvents() {
         renderTablePage();
     });
     
-    document.getElementById("reset-table")?.addEventListener("click", () => {
-        const searchInput = document.getElementById("search-input");
-        if (searchInput) searchInput.value = "";
-        sortKey = "";
-        sortType = "asc";
-        currentPage = 1;
-        pageSize = 20;
-        const pageSizeSelect = document.getElementById("page-size-select");
-        if (pageSizeSelect) pageSizeSelect.value = "20";
-        applyFilterAndSort();
-        renderTablePage();
-    });
-    
-    document.getElementById("export-main-png")?.addEventListener("click", () => exportChart(mainChart, 'png', 'main_chart'));
-    document.getElementById("export-main-jpg")?.addEventListener("click", () => exportChart(mainChart, 'jpg', 'main_chart'));
-    document.getElementById("export-pie-png")?.addEventListener("click", () => exportChart(pieChart, 'png', 'pie_chart'));
-    document.getElementById("export-pie-jpg")?.addEventListener("click", () => exportChart(pieChart, 'jpg', 'pie_chart'));
-    document.getElementById("export-adv-png")?.addEventListener("click", () => exportChart(advancedChart, 'png', 'advanced_chart'));
-    document.getElementById("export-adv-jpg")?.addEventListener("click", () => exportChart(advancedChart, 'jpg', 'advanced_chart'));
-    
-    // 夜间模式
-    initDarkMode();
 }
 
 // ======================= Toast 通知系统（替代 alert）=======================
@@ -5534,13 +5846,21 @@ function renderAgentChartInsideBubble(bubble, config) {
         bubble.insertBefore(wrap, actions || null);
     }
     const chartEl = wrap.querySelector('.agent-inline-chart');
+    // 已有有效实例时只 resize，不重新 init（避免尺寸每次偏移累积）
+    if (chartEl.id && window.echarts) {
+        const existing = echarts.getInstanceByDom(chartEl);
+        if (existing && !existing.isDisposed()) {
+            try { existing.resize(); } catch(e) {}
+            return chartEl.id;
+        }
+    }
     const chartId = 'agent_inline_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
     chartEl.id = chartId;
     requestAnimationFrame(() => _doRenderInlineChart(chartId, config, false));
     return chartId;
 }
 
-function exportNearestAgentChart(bubble, config) {
+function exportNearestAgentChart(bubble, config, question) {
     let chartEl = bubble?.querySelector('.agent-inline-chart');
     if (!window.echarts) {
         showToast('图表库尚未加载，暂时无法导出', 'warn');
@@ -5559,17 +5879,17 @@ function exportNearestAgentChart(bubble, config) {
         const url = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#ffffff' });
         const link = document.createElement('a');
         link.href = url;
-        link.download = `agent_chart_${Date.now()}.png`;
+        link.download = `${extractQuestionSubject(question)}_图表.png`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
     }, 260);
 }
 
-function exportAnswerAsCsv(data) {
+function exportAnswerAsCsv(data, question) {
     const lines = String(data?.answer || '').split('\n').map(line => line.trim()).filter(Boolean);
     const csv = '\ufeff内容\n' + lines.map(line => `"${line.replace(/"/g, '""')}"`).join('\n');
-    agentDownload(`agent_answer_${Date.now()}.csv`, 'text/csv;charset=utf-8', csv);
+    agentDownload(`${extractQuestionSubject(question)}_数据.csv`, 'text/csv;charset=utf-8', csv);
 }
 
 document.addEventListener('click', function(e) {
@@ -5581,8 +5901,8 @@ document.addEventListener('click', function(e) {
     const question = box?._agentQuestion || '';
     const action = btn.dataset.agentAction;
     if (action === 'inline-chart') renderAgentChartInsideBubble(bubble, data.chart);
-    if (action === 'export-inline-chart') exportNearestAgentChart(bubble, data.chart);
-    if (action === 'export-chat-table') exportAnswerAsCsv(data);
+    if (action === 'export-inline-chart') exportNearestAgentChart(bubble, data.chart, question);
+    if (action === 'export-chat-table') exportAnswerAsCsv(data, question);
     if (action === 'report-html') agentGenerateReport(data, question);
     if (action === 'open-data-table') toggleInlineDataTable(bubble, data.chart);
 });
@@ -5793,7 +6113,7 @@ function agentBuildDocx(data, question) {
     const trace = (data.toolTrace || []).map(t => `${t.normalizedTool || t.tool || 'tool'}: ${JSON.stringify(t.params || {})}`);
     const sections = [
         agentDocxParagraph(title, 'Title'),
-        agentDocxParagraph(`生成时间：${now}　来源：山东财经大学科研教育人才一体化数据平台`),
+        agentDocxParagraph(`生成时间：${now}　来源：山东财经大学教育科技人才一体化平台`),
         agentDocxParagraph('分析结论', 'Heading1'),
         agentDocxParagraph(agentPlainText(data.answer || '（无内容）')),
         citations.length ? agentDocxParagraph('数据来源', 'Heading1') + citations.map(x => agentDocxParagraph(`· ${x}`)).join('') : ''
@@ -5817,7 +6137,7 @@ function agentBuildDocx(data, question) {
 
 function agentGenerateReport(data, question) {
     const docx = agentBuildDocx(data, question);
-    agentDownloadBlob(`agent_report_${Date.now()}.docx`, docx);
+    agentDownloadBlob(`${extractQuestionSubject(question)}_分析报告.docx`, docx);
     showToast?.('分析报告 DOCX 已生成并下载', 'success');
 }
 
@@ -5967,7 +6287,7 @@ waitForWorkbook();
 bindEvents();
 initSdufeCover();
 refineRagCapabilityBadges();
-initSheetSwitchGuide();
+
 initPaginationGuide();
 ensureDashboardAnalysisVisible();
 init();
